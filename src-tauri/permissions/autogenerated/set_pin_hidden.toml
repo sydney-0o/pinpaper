@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-pin-hidden"
+description = "Enables the set_pin_hidden command without any pre-configured scope."
+commands.allow = ["set_pin_hidden"]
+
+[[permission]]
+identifier = "deny-set-pin-hidden"
+description = "Denies the set_pin_hidden command without any pre-configured scope."
+commands.deny = ["set_pin_hidden"]

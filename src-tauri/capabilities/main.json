@@ -1,0 +1,21 @@
+{
+  "identifier": "main",
+  "description": "Local Pinpaper controls only",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "allow-snapshot",
+    "allow-save-settings",
+    "allow-next-wallpaper",
+    "allow-feedback",
+    "allow-disconnect",
+    "allow-open-pin",
+    "allow-browser-open",
+    "allow-browser-import",
+    "allow-set-pin-hidden",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-browser-close"
+  ]
+}

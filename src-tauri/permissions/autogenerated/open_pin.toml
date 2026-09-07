@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-pin"
+description = "Enables the open_pin command without any pre-configured scope."
+commands.allow = ["open_pin"]
+
+[[permission]]
+identifier = "deny-open-pin"
+description = "Denies the open_pin command without any pre-configured scope."
+commands.deny = ["open_pin"]

@@ -1,0 +1,18 @@
+{
+  "identifier": "pinterest-capture",
+  "description": "Only accepts a requested pin-data report; no access to settings, tokens, files or wallpaper commands",
+  "windows": [
+    "pinterest-session",
+    "pinterest-verification-*"
+  ],
+  "local": false,
+  "remote": {
+    "urls": [
+      "https://pinterest.com/*",
+      "https://*.pinterest.com/*"
+    ]
+  },
+  "permissions": [
+    "allow-browser-report"
+  ]
+}
