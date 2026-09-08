@@ -337,6 +337,7 @@ fn normalize_report(report: PageReport) -> Result<Vec<Pin>, String> {
                 && seen.insert(p.id.clone())
         })
         .map(|p| Pin {
+            dimensions_verified: false,
             id: p.id,
             board_id: SOURCE.into(),
             title: if p.title.trim().is_empty() {

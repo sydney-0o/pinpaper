@@ -100,6 +100,7 @@ impl Engine {
                     .iter_mut()
                     .filter(|p| p.id == pin.id && p.board_id == pin.board_id)
                 {
+                    candidate.dimensions_verified = true;
                     candidate.width = w;
                     candidate.height = h;
                 }
@@ -121,6 +122,7 @@ impl Engine {
         wallpaper::apply(&self.app, &path)?;
         self.preview.lock().unwrap().clear();
         let mut lib = self.library.lock().unwrap();
+        pin.dimensions_verified = true;
         pin.width = w;
         pin.height = h;
         lib.current = Some(pin.clone());

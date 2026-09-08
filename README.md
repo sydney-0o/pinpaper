@@ -79,7 +79,7 @@ npm run dev starts an interface-only browser preview. Development-only ?review=c
 
 ## Validation
 
-The current macOS release build and TypeScript/Vite build passed. Rust: 19 tests passed, one optional benchmark ignored. Node: seven tests passed, covering extraction, regional origins, all translation keys/placeholders and language fallback. A separately run synthetic preview benchmark measured approximately 57 ms for an initial 3840×2160 decode and 10 ms total for 1,000 cached reads. These are synthetic measurements, not live application profiling.
+The current macOS release build and TypeScript/Vite build passed. Rust: 21 tests passed, one optional benchmark ignored. Node: seven tests passed, covering extraction, regional origins, all translation keys/placeholders and language fallback. A separately run synthetic preview benchmark measured approximately 57 ms for an initial 3840×2160 decode and 10 ms total for 1,000 cached reads. These are synthetic measurements, not live application profiling.
 
 The running user instance was not closed, replaced or driven. Earlier browser layout checks covered 380×560 and 460×760; the final translated layout still needs full visual acceptance. The three-OS workflow in .github/workflows/build.yml is prepared but has not run remotely. Windows/Linux compilation and desktop behavior have not been verified here.
 
@@ -96,4 +96,6 @@ Manual acceptance should cover login and verification, scrolling Home and saved 
 - language.rs: system language and native labels.
 - assets/leaf.svg and scripts/render-tray.py: tray artwork and reproducible rendering (Pillow).
 
-Downloaded JPEGs, including pictures rejected by current size filters, remain on disk until local data is reset. There is no automatic cache eviction. Change wallpaper checks all ranked candidates until one downloads and matches the actual resolution; there is no five-candidate cutoff. OS wallpaper-setting errors still stop immediately.
+Downloaded images, including pictures rejected by current size filters, remain on disk until local data is reset. There is no automatic cache eviction. Change wallpaper checks all ranked candidates until one downloads and matches the actual resolution; there is no five-candidate cutoff. OS wallpaper-setting errors still stop immediately.
+
+Image quality: downloads request the original Pinterest size path first, including previously imported thumbnails. Only HTTP 404/410 falls back to the supplied source. Unverified metadata dimensions do not exclude originals. EXIF rotation is applied before checking dimensions. Images are cached as lossless PNG without resizing or another JPEG compression pass. Existing JPEGs remain readable for the current wallpaper; new changes and prefetch use a separate cache version. This cannot repair blur already present in the source. A 3440x1440 fill requires at least 3440 pixels wide and 1440 high to avoid enlargement.

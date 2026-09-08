@@ -8,8 +8,19 @@ use std::{
     sync::{Arc, Mutex, OnceLock, Weak},
 };
 const MAX_DOWNLOAD: u64 = 25 * 1024 * 1024;
+pub fn quality_cache(dir: &Path, pin: &Pin) -> PathBuf {
+    dir.join(format!(
+        "lossless-v2-{:x}.png",
+        Sha256::digest(pin.url.as_bytes())
+    ))
+}
 pub fn cached(dir: &Path, pin: &Pin) -> PathBuf {
-    dir.join(format!("{:x}.jpg", Sha256::digest(pin.url.as_bytes())))
+    let upgraded = quality_cache(dir, pin);
+    if upgraded.exists() {
+        upgraded
+    } else {
+        dir.join(format!("{:x}.jpg", Sha256::digest(pin.url.as_bytes())))
+    }
 }
 // Shared by foreground and prefetch: one writer per URL, with a cache
 // recheck after acquiring the lock. Different URLs never block each other.
@@ -53,15 +64,24 @@ pub fn download(dir: &Path, pin: &Pin) -> Result<PathBuf, String> {
         return Err("Image is not hosted on Pinterest's image CDN".into());
     }
     fs::create_dir_all(dir).map_err(|_| "Cannot create image cache")?;
-    let path = cached(dir, pin);
+    let path = quality_cache(dir, pin);
     cache_once(&path, || {
-        let response = network::client()?.get(&pin.url).send().map_err(|error| {
+        let client = network::client()?;
+        let original = network::original_url(&pin.url);
+        let mut response = client.get(&original).send().map_err(|error| {
             if error.is_timeout() {
                 "Image download timed out after 30 seconds"
             } else {
                 "Image download failed"
             }
         })?;
+        // Fall back only when the original is absent, never because of a timeout.
+        if original != pin.url && matches!(response.status().as_u16(), 404 | 410) {
+            response = client
+                .get(&pin.url)
+                .send()
+                .map_err(|_| "Image fallback download failed")?;
+        }
         if !response.status().is_success() {
             return Err(format!(
                 "Image download returned HTTP {}",
@@ -79,35 +99,43 @@ pub fn download(dir: &Path, pin: &Pin) -> Result<PathBuf, String> {
         if bytes.len() as u64 > MAX_DOWNLOAD {
             return Err("Image exceeds 25 MB".into());
         }
-        let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
-            .with_guessed_format()
-            .map_err(|_| "Unknown image format")?;
-        let mut limits = image::Limits::default();
-        limits.max_image_width = Some(16384);
-        limits.max_image_height = Some(16384);
-        limits.max_alloc = Some(256 * 1024 * 1024);
-        reader.limits(limits);
-        let decoded = reader
-            .decode()
-            .map_err(|_| "Image cannot be decoded within safety limits")?;
-        if decoded.width() < pin.width.min(512) {
-            return Err("Image resolution does not match metadata".into());
-        }
+        let decoded = decode_oriented(bytes)?;
         let temp = path.with_extension("tmp");
-        image::DynamicImage::ImageRgb8(decoded.to_rgb8())
-            .save_with_format(&temp, image::ImageFormat::Jpeg)
+        decoded
+            .save_with_format(&temp, image::ImageFormat::Png)
             .map_err(|_| "Cannot write image cache")?;
         if fs::metadata(&temp)
             .map_err(|_| "Cannot inspect cached image")?
             .len()
-            > MAX_DOWNLOAD
+            > 256 * 1024 * 1024
         {
             let _ = fs::remove_file(&temp);
-            return Err("Converted image exceeds 25 MB".into());
+            return Err("Decoded PNG exceeds 256 MB".into());
         }
         fs::rename(&temp, &path).map_err(|_| "Cannot finish cached image")?;
         Ok(path.clone())
     })
+}
+fn decode_oriented(bytes: Vec<u8>) -> Result<image::DynamicImage, String> {
+    use image::ImageDecoder;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| "Unknown image format")?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16384);
+    limits.max_image_height = Some(16384);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    reader.limits(limits);
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|_| "Image cannot be decoded within safety limits")?;
+    let orientation = decoder
+        .orientation()
+        .map_err(|_| "Cannot read image orientation")?;
+    let mut decoded =
+        image::DynamicImage::from_decoder(decoder).map_err(|_| "Image cannot be decoded")?;
+    decoded.apply_orientation(orientation);
+    Ok(decoded)
 }
 #[cfg(target_os = "macos")]
 pub fn apply(app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
@@ -216,6 +244,31 @@ pub fn apply(_app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod download_tests {
     use super::*;
+    #[test]
+    fn exif_rotation_changes_dimensions_and_png_preserves_pixels() {
+        let source = image::RgbImage::from_fn(8, 4, |x, y| {
+            image::Rgb([(x * 20) as u8, (y * 40) as u8, 70])
+        });
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 100)
+            .encode_image(&image::DynamicImage::ImageRgb8(source))
+            .unwrap();
+        // Minimal little-endian TIFF: orientation=6 (90 degrees clockwise).
+        let exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x06\0\0\0\0\0\0\0";
+        let mut tagged = jpeg[..2].to_vec();
+        tagged.extend_from_slice(&[0xff, 0xe1]);
+        tagged.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+        tagged.extend_from_slice(exif);
+        tagged.extend_from_slice(&jpeg[2..]);
+        let decoded = decode_oriented(tagged).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (4, 8));
+        let mut png = std::io::Cursor::new(Vec::new());
+        decoded.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        assert_eq!(
+            decode_oriented(png.into_inner()).unwrap().to_rgb8(),
+            decoded.to_rgb8()
+        );
+    }
     #[test]
     fn selection_passes_five_rejections_and_stops_at_first_usable_picture() {
         let mut visited = Vec::new();

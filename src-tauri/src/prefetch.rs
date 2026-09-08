@@ -34,7 +34,7 @@ pub fn start(engine: &Arc<Engine>, receiver: Receiver<()>) {
                 {
                     continue;
                 }
-                let path = wallpaper::cached(&engine.cache, &pin);
+                let path = wallpaper::quality_cache(&engine.cache, &pin);
                 if path.exists() {
                     continue;
                 }

@@ -56,6 +56,8 @@ impl Settings {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Pin {
+    #[serde(default)]
+    pub dimensions_verified: bool,
     pub id: String,
     pub board_id: String,
     pub title: String,
@@ -99,7 +101,8 @@ pub fn ranked(lib: &Library) -> Vec<Pin> {
             lib.settings.board_ids.contains(&p.board_id)
                 && lib.feedback.get(&p.id) != Some(&-1)
                 && lib.current.as_ref().map(|c| c.id != p.id).unwrap_or(true)
-                && ((p.board_id == crate::browser_session::SOURCE && p.width == 0 && p.height == 0)
+                && ((p.board_id == crate::browser_session::SOURCE
+                    && (!p.dimensions_verified || (p.width == 0 && p.height == 0)))
                     || (p.width >= lib.settings.min_width
                         && p.height > 0
                         && match lib.settings.orientation.as_str() {
@@ -149,6 +152,7 @@ mod tests {
     }
     fn pin(id: &str, title: &str) -> Pin {
         Pin {
+            dimensions_verified: true,
             id: id.into(),
             board_id: "b".into(),
             title: title.into(),
@@ -238,6 +242,7 @@ mod browser_ranking_tests {
         let mut l = Library::default();
         l.settings.board_ids = vec![crate::browser_session::SOURCE.into()];
         l.pins.push(Pin {
+            dimensions_verified: false,
             id: "123".into(),
             board_id: crate::browser_session::SOURCE.into(),
             title: "Forest".into(),
@@ -249,6 +254,8 @@ mod browser_ranking_tests {
         assert_eq!(ranked(&l).len(), 1);
         l.pins[0].width = 736;
         l.pins[0].height = 400;
+        assert_eq!(ranked(&l).len(), 1); // Thumbnail metadata cannot reject the original.
+        l.pins[0].dimensions_verified = true;
         assert!(ranked(&l).is_empty());
         l.pins[0].width = 2000;
         l.pins[0].height = 1000;
