@@ -38,7 +38,7 @@ The scheduler checks every 15 seconds. Active hours use local time, support over
 
 | Platform | Adapter and limits |
 | --- | --- |
-| macOS | Native NSWorkspace on connected screens; no System Events Automation requirement. Inactive Spaces are not guaranteed. |
+| macOS | Native NSWorkspace on connected screens; no System Events Automation requirement. On each Space switch, the current cached wallpaper is reapplied to connected screens. Inactive Spaces update when visited while Pinpaper runs; enable macOS “Show on all Spaces” for system-wide mirroring. |
 | Windows | SystemParametersInfoW; one wallpaper using existing OS fit behavior. |
 | Linux GNOME / Unity / Budgie | gsettings light and dark wallpaper URIs; matching schema required. |
 | Linux Cinnamon / MATE | Desktop-specific gsettings keys. |

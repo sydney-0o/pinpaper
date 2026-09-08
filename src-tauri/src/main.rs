@@ -460,6 +460,43 @@ fn main() {
                 preview: Mutex::new(preview::PreviewCache::default()),
             });
             app.manage(engine.clone());
+            #[cfg(target_os = "macos")]
+            {
+                use objc2_app_kit::{NSWorkspace, NSWorkspaceActiveSpaceDidChangeNotification};
+                // Workspace retains the observer for the app lifetime. The callback captures
+                // only a weak engine reference and never downloads or changes rotation history.
+                let weak = Arc::downgrade(&engine);
+                let callback = block2::RcBlock::new(
+                    move |_: std::ptr::NonNull<objc2_foundation::NSNotification>| {
+                        let Some(engine) = weak.upgrade() else { return };
+                        let path = engine
+                            .library
+                            .lock()
+                            .unwrap()
+                            .current
+                            .as_ref()
+                            .map(|pin| wallpaper::cached(&engine.cache, pin));
+                        if let Some(path) = path.filter(|p| p.exists()) {
+                            if let Err(error) = wallpaper::apply(&engine.app, &path) {
+                                *engine.error.lock().unwrap() = Some(error);
+                            }
+                        }
+                    },
+                );
+                // Notification is delivered on the posting thread; apply marshals AppKit
+                // work to the main thread when necessary.
+                let observer = unsafe {
+                    NSWorkspace::sharedWorkspace()
+                        .notificationCenter()
+                        .addObserverForName_object_queue_usingBlock(
+                            Some(NSWorkspaceActiveSpaceDidChangeNotification),
+                            None,
+                            None,
+                            &callback,
+                        )
+                };
+                std::mem::forget(observer);
+            }
             let lang = language::system_language();
             let show = MenuItem::with_id(
                 app,
