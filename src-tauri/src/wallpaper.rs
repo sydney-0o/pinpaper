@@ -101,9 +101,17 @@ pub fn download(dir: &Path, pin: &Pin) -> Result<PathBuf, String> {
         }
         let decoded = decode_oriented(bytes)?;
         let temp = path.with_extension("tmp");
+        // Lossless, but use fast compression: wallpaper changes must not wait
+        // for a high-compression PNG pass over millions of pixels.
+        let file = std::fs::File::create(&temp).map_err(|_| "Cannot write image cache")?;
+        let encoder = image::codecs::png::PngEncoder::new_with_quality(
+            std::io::BufWriter::new(file),
+            image::codecs::png::CompressionType::Fast,
+            image::codecs::png::FilterType::Sub,
+        );
         decoded
-            .save_with_format(&temp, image::ImageFormat::Png)
-            .map_err(|_| "Cannot write image cache")?;
+            .write_with_encoder(encoder)
+            .map_err(|_| "Cannot encode cached image")?;
         if fs::metadata(&temp)
             .map_err(|_| "Cannot inspect cached image")?
             .len()
@@ -113,6 +121,7 @@ pub fn download(dir: &Path, pin: &Pin) -> Result<PathBuf, String> {
             return Err("Decoded PNG exceeds 256 MB".into());
         }
         fs::rename(&temp, &path).map_err(|_| "Cannot finish cached image")?;
+        let _ = crate::preview::prepare(&path, &decoded);
         Ok(path.clone())
     })
 }
@@ -154,6 +163,13 @@ pub fn apply(app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
             return Err("No connected display found".into());
         }
         for screen in screens.iter() {
+            if workspace
+                .desktopImageURLForScreen(&screen)
+                .and_then(|current| current.path())
+                .is_some_and(|current| current.to_string() == path)
+            {
+                continue;
+            }
             let options = workspace
                 .desktopImageOptionsForScreen(&screen)
                 .unwrap_or_else(NSDictionary::new);

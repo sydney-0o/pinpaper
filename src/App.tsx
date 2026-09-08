@@ -856,15 +856,17 @@ export default function App() {
       )}
       <footer className="help-footer">
         <p>{t("retryHelp")}</p>
-        <button
-          className="text-button"
-          onClick={() => {
-            settings();
-            setStep(0);
-          }}
-        >
-          {t("retry")}
-        </button>
+        {page !== "settings" && (
+          <button
+            className="text-button"
+            onClick={() => {
+              settings();
+              setStep(0);
+            }}
+          >
+            {t("retry")}
+          </button>
+        )}
       </footer>
     </main>
   );

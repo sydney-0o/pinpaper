@@ -20,14 +20,34 @@ impl PreviewCache {
         self.entry.as_ref().and_then(|e| e.1.clone())
     }
 }
+fn thumbnail_path(path: &Path) -> PathBuf {
+    path.with_extension("preview.jpg")
+}
+pub fn prepare(path: &Path, image: &image::DynamicImage) -> Option<()> {
+    let thumb = image.thumbnail(560, 360).to_rgb8();
+    let mut bytes = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 75)
+        .encode_image(&image::DynamicImage::ImageRgb8(thumb))
+        .ok()?;
+    let target = thumbnail_path(path);
+    let temp = target.with_extension("tmp");
+    std::fs::write(&temp, bytes).ok()?;
+    std::fs::rename(temp, target).ok()
+}
 pub fn load(path: &Path) -> Option<String> {
     use base64::Engine;
-    let im = image::open(path).ok()?.thumbnail(760, 500);
-    let mut bytes = std::io::Cursor::new(vec![]);
-    im.write_to(&mut bytes, image::ImageFormat::Png).ok()?;
+    let target = thumbnail_path(path);
+    let bytes = match std::fs::read(&target) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            let image = image::open(path).ok()?;
+            prepare(path, &image)?;
+            std::fs::read(target).ok()?
+        }
+    };
     Some(format!(
-        "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())
+        "data:image/jpeg;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
     ))
 }
 #[cfg(test)]
@@ -81,6 +101,14 @@ mod benchmark {
             image::Rgb([(x % 251) as u8, (y % 241) as u8, ((x + y) % 239) as u8])
         });
         image.save(&path).unwrap();
+        let prepare_start = std::time::Instant::now();
+        prepare(&path, &image::DynamicImage::ImageRgb8(image)).unwrap();
+        println!(
+            "prepare thumbnail from decoded image: {:?}",
+            prepare_start.elapsed()
+        );
+        // A prepared thumbnail must work even without reopening the full-size file.
+        std::fs::remove_file(&path).unwrap();
         let mut cache = PreviewCache::default();
         let start = std::time::Instant::now();
         let first = cache.get_or_load(&path, load).unwrap();

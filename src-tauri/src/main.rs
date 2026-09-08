@@ -115,9 +115,15 @@ impl Engine {
             }
             Ok((pin, path, w, h))
         });
-        // Persist discovered dimensions even when every candidate was unsuitable.
-        self.save(&self.library.lock().unwrap())?;
-        let (mut pin, path, w, h) = selected?;
+        let (mut pin, path, w, h) = match selected {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                // Persist rejected dimensions, but do not write the full library
+                // twice on every successful wallpaper change.
+                self.save(&self.library.lock().unwrap())?;
+                return Err(error);
+            }
+        };
         // OS adapter failures are not image failures: stop instead of downloading the library.
         wallpaper::apply(&self.app, &path)?;
         self.preview.lock().unwrap().clear();
