@@ -36,7 +36,7 @@
   "addPictures": "Add pictures from Pinterest",
   "openFirst": "Open Pinterest in step 1 first.",
   "addedCount": "Pictures in your collection: {count}",
-  "addedNotice": "Pictures added. Go back and choose Change wallpaper.",
+  "addedNotice": "Pictures added and saved. No need to apply the selection or save settings again. Go back and choose Change wallpaper.",
   "retryHelp": "If something did not work, return to step 1 and try the three steps again.",
   "retry": "Show the steps",
   "collections": "Pictures to use",
@@ -108,5 +108,6 @@
   "trayPause": "Pause / resume schedule",
   "trayQuit": "Quit Pinpaper",
   "browserTitle": "Pinterest — sign in and load pictures",
-  "verifyTitle": "Pinterest — verification"
+  "verifyTitle": "Pinterest — verification",
+  "minWidthHelp": "Not every Pinterest picture is large enough for your screen. Lowering the minimum width makes more pictures available, but they may look less sharp."
 }

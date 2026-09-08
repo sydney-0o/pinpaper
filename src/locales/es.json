@@ -36,7 +36,7 @@
   "addPictures": "Añadir imágenes de Pinterest",
   "openFirst": "Primero abre Pinterest en el paso 1.",
   "addedCount": "Imágenes en tu colección: {count}",
-  "addedNotice": "Imágenes añadidas. Vuelve y pulsa Cambiar fondo.",
+  "addedNotice": "Imágenes añadidas y guardadas. No necesitas volver a aplicar la selección ni guardar los ajustes. Vuelve y elige Cambiar fondo.",
   "retryHelp": "Si algo falla, vuelve al paso 1 y repite los tres pasos.",
   "retry": "Ver los pasos",
   "collections": "Imágenes que se usarán",
@@ -108,5 +108,6 @@
   "trayPause": "Pausar / reanudar cambios",
   "trayQuit": "Salir de Pinpaper",
   "browserTitle": "Pinterest — inicia sesión y carga imágenes",
-  "verifyTitle": "Pinterest — verificación"
+  "verifyTitle": "Pinterest — verificación",
+  "minWidthHelp": "No todas las imágenes de Pinterest tienen suficiente resolución para tu pantalla. Reducir el ancho mínimo permite usar más imágenes, pero pueden verse menos nítidas."
 }

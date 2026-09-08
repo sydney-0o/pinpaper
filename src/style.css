@@ -934,3 +934,19 @@ label {
     justify-self: stretch;
   }
 }
+
+.field-help {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.55;
+  color: var(--muted, #6d756c);
+}
+.primary[aria-busy="true"] {
+  opacity: 1;
+  background: #345d48;
+  color: #fff;
+  cursor: progress;
+}
+.primary[aria-busy="true"] .spin {
+  flex-shrink: 0;
+}

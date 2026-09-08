@@ -2,12 +2,18 @@ use reqwest::blocking::Client;
 use std::time::Duration;
 use url::Url;
 pub fn client() -> Result<Client, String> {
-    Client::builder()
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .user_agent("Pinpaper/0.1")
-        .build()
-        .map_err(|_| "Cannot initialize HTTP client".into())
+    static CLIENT: std::sync::OnceLock<Result<Client, String>> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(30))
+                .redirect(reqwest::redirect::Policy::none())
+                .user_agent("Pinpaper/0.1")
+                .build()
+                .map_err(|_| "Cannot initialize HTTP client".into())
+        })
+        .clone()
 }
 pub fn valid_image_url(s: &str) -> bool {
     Url::parse(s)

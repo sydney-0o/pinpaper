@@ -3,6 +3,7 @@ mod browser_session;
 mod language;
 mod model;
 mod network;
+mod prefetch;
 mod preview;
 mod wallpaper;
 use chrono::Timelike;
@@ -27,6 +28,8 @@ struct Engine {
     library: Mutex<Library>,
     error: Mutex<Option<String>>,
     busy: AtomicBool,
+    changing: AtomicBool,
+    warm: std::sync::mpsc::SyncSender<()>,
     browser_connected: AtomicBool,
     bridge: browser_session::ImportBridge,
     data: PathBuf,
@@ -40,6 +43,7 @@ struct Snapshot {
     browser_connected: bool,
     browser_open: bool,
     busy: bool,
+    changing: bool,
     error: Option<String>,
     preview: Option<String>,
     locale: String,
@@ -64,6 +68,16 @@ impl Engine {
         fs::rename(temp, target).map_err(|_| "Cannot save library".into())
     }
     fn next(&self) -> Result<(), String> {
+        struct Changing<'a>(&'a Engine);
+        impl Drop for Changing<'_> {
+            fn drop(&mut self) {
+                self.0.changing.store(false, Ordering::SeqCst);
+                let _ = self.0.app.emit_to("main", "pinpaper-changed", ());
+            }
+        }
+        self.changing.store(true, Ordering::SeqCst);
+        let _changing = Changing(self);
+        let _ = self.app.emit_to("main", "pinpaper-changed", ());
         let list = model::ranked(&self.library.lock().unwrap());
         if list.is_empty() {
             return Err("No matching pictures. Choose a collection in Pictures to use, add pictures, or relax your picture preferences.".into());
@@ -120,7 +134,14 @@ impl Engine {
                         lib.history.remove(0);
                     }
                     self.save(&lib)?;
-                    wallpaper::prune(&self.cache, &[path]);
+                    let mut keep = vec![path];
+                    keep.extend(
+                        model::ranked(&lib)
+                            .iter()
+                            .take(2)
+                            .map(|p| wallpaper::cached(&self.cache, p)),
+                    );
+                    wallpaper::prune(&self.cache, &keep);
                     return Ok(());
                 }
                 Err(e) => last = e,
@@ -144,6 +165,7 @@ fn exclusive<T>(e: &Engine, f: impl FnOnce() -> Result<T, String>) -> Result<T, 
     *e.error.lock().unwrap() = result.as_ref().err().cloned();
     drop(guard);
     let _ = e.app.emit_to("main", "pinpaper-changed", ());
+    let _ = e.warm.try_send(());
     result
 }
 #[tauri::command]
@@ -167,6 +189,7 @@ async fn snapshot(
             browser_connected: e.browser_connected.load(Ordering::SeqCst),
             browser_open: app.get_webview_window(browser_session::LABEL).is_some(),
             busy: e.busy.load(Ordering::SeqCst),
+            changing: e.changing.load(Ordering::SeqCst),
             error: e.error.lock().unwrap().clone(),
             preview,
             locale: language::system_language().into(),
@@ -448,11 +471,14 @@ fn main() {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Library::default(), None),
                 Err(_) => (Library::default(), Some("Cannot read saved library".into())),
             };
+            let (warm, warm_receiver) = std::sync::mpsc::sync_channel(1);
             let engine = Arc::new(Engine {
                 app: app.handle().clone(),
                 library: Mutex::new(library),
                 error: Mutex::new(error),
                 busy: AtomicBool::new(false),
+                changing: AtomicBool::new(false),
+                warm,
                 browser_connected: AtomicBool::new(false),
                 bridge: browser_session::ImportBridge::default(),
                 data,
@@ -460,6 +486,8 @@ fn main() {
                 preview: Mutex::new(preview::PreviewCache::default()),
             });
             app.manage(engine.clone());
+            prefetch::start(&engine, warm_receiver);
+            let _ = engine.warm.try_send(());
             #[cfg(target_os = "macos")]
             {
                 use objc2_app_kit::{NSWorkspace, NSWorkspaceActiveSpaceDidChangeNotification};

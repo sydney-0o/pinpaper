@@ -49,6 +49,7 @@ type Snapshot = {
   browser_connected: boolean;
   browser_open: boolean;
   busy: boolean;
+  changing: boolean;
   error: string | null;
   preview: string | null;
   locale: string;
@@ -79,6 +80,7 @@ const initial: Snapshot = {
   browser_connected: false,
   browser_open: false,
   busy: false,
+  changing: false,
   error: null,
   preview: null,
   locale: resolveLanguage(navigator.languages),
@@ -339,10 +341,24 @@ export default function App() {
             <button
               className="primary"
               disabled={blocked || !hasSelection}
+              aria-busy={
+                state.changing ||
+                (busy && ["next_wallpaper", "feedback"].includes(operation))
+              }
               onClick={() => action("next_wallpaper")}
             >
-              <SkipForward size={17} />
-              {t("changeWallpaper")}
+              {state.changing ||
+              (busy && ["next_wallpaper", "feedback"].includes(operation)) ? (
+                <>
+                  <LoaderCircle className="spin" size={19} />
+                  <span role="status">{t("changing")}</span>
+                </>
+              ) : (
+                <>
+                  <SkipForward size={17} />
+                  {t("changeWallpaper")}
+                </>
+              )}
             </button>
             <button
               className="secondary"
@@ -732,6 +748,7 @@ export default function App() {
                     </option>
                   ))}
                 </select>
+                <span className="field-help">{t("minWidthHelp")}</span>
               </label>
             </div>
           </section>

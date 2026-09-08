@@ -1,14 +1,50 @@
 use crate::{model::Pin, network};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     fs,
     io::Read,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock, Weak},
 };
 const MAX_DOWNLOAD: u64 = 25 * 1024 * 1024;
 const CACHE_LIMIT: u64 = 256 * 1024 * 1024;
 pub fn cached(dir: &Path, pin: &Pin) -> PathBuf {
     dir.join(format!("{:x}.jpg", Sha256::digest(pin.url.as_bytes())))
+}
+// Shared by foreground and prefetch: one writer per URL, with a cache
+// recheck after acquiring the lock. Different URLs never block each other.
+fn download_lock(path: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS.get_or_init(Default::default).lock().unwrap();
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(path).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(path.to_owned(), Arc::downgrade(&lock));
+    lock
+}
+fn cache_once(
+    path: &Path,
+    load: impl FnOnce() -> Result<PathBuf, String>,
+) -> Result<PathBuf, String> {
+    let lock = download_lock(path);
+    let _writer = lock.lock().unwrap();
+    if path.exists() {
+        return Ok(path.to_owned());
+    }
+    load()
+}
+pub fn has_prefetch_room(dir: &Path) -> bool {
+    let total: u64 = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.metadata().ok())
+        .map(|m| m.len())
+        .sum();
+    total < CACHE_LIMIT.saturating_sub(MAX_DOWNLOAD)
 }
 pub fn download(dir: &Path, pin: &Pin) -> Result<PathBuf, String> {
     if !network::valid_image_url(&pin.url) {
@@ -16,50 +52,60 @@ pub fn download(dir: &Path, pin: &Pin) -> Result<PathBuf, String> {
     }
     fs::create_dir_all(dir).map_err(|_| "Cannot create image cache")?;
     let path = cached(dir, pin);
-    if path.exists() {
-        return Ok(path);
-    }
-    let response = network::client()?
-        .get(&pin.url)
-        .send()
-        .map_err(|_| "Image download failed")?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "Image download returned HTTP {}",
-            response.status()
-        ));
-    }
-    if response.content_length().unwrap_or(0) > MAX_DOWNLOAD {
-        return Err("Image exceeds 25 MB".into());
-    }
-    let mut bytes = vec![];
-    response
-        .take(MAX_DOWNLOAD + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "Image download interrupted")?;
-    if bytes.len() as u64 > MAX_DOWNLOAD {
-        return Err("Image exceeds 25 MB".into());
-    }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|_| "Unknown image format")?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(16384);
-    limits.max_image_height = Some(16384);
-    limits.max_alloc = Some(256 * 1024 * 1024);
-    reader.limits(limits);
-    let decoded = reader
-        .decode()
-        .map_err(|_| "Image cannot be decoded within safety limits")?;
-    if decoded.width() < pin.width.min(512) {
-        return Err("Image resolution does not match metadata".into());
-    }
-    let temp = path.with_extension("tmp");
-    image::DynamicImage::ImageRgb8(decoded.to_rgb8())
-        .save_with_format(&temp, image::ImageFormat::Jpeg)
-        .map_err(|_| "Cannot write image cache")?;
-    fs::rename(&temp, &path).map_err(|_| "Cannot finish cached image")?;
-    Ok(path)
+    cache_once(&path, || {
+        let response = network::client()?.get(&pin.url).send().map_err(|error| {
+            if error.is_timeout() {
+                "Image download timed out after 30 seconds"
+            } else {
+                "Image download failed"
+            }
+        })?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "Image download returned HTTP {}",
+                response.status()
+            ));
+        }
+        if response.content_length().unwrap_or(0) > MAX_DOWNLOAD {
+            return Err("Image exceeds 25 MB".into());
+        }
+        let mut bytes = vec![];
+        response
+            .take(MAX_DOWNLOAD + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "Image download interrupted")?;
+        if bytes.len() as u64 > MAX_DOWNLOAD {
+            return Err("Image exceeds 25 MB".into());
+        }
+        let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .map_err(|_| "Unknown image format")?;
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(16384);
+        limits.max_image_height = Some(16384);
+        limits.max_alloc = Some(256 * 1024 * 1024);
+        reader.limits(limits);
+        let decoded = reader
+            .decode()
+            .map_err(|_| "Image cannot be decoded within safety limits")?;
+        if decoded.width() < pin.width.min(512) {
+            return Err("Image resolution does not match metadata".into());
+        }
+        let temp = path.with_extension("tmp");
+        image::DynamicImage::ImageRgb8(decoded.to_rgb8())
+            .save_with_format(&temp, image::ImageFormat::Jpeg)
+            .map_err(|_| "Cannot write image cache")?;
+        if fs::metadata(&temp)
+            .map_err(|_| "Cannot inspect cached image")?
+            .len()
+            > MAX_DOWNLOAD
+        {
+            let _ = fs::remove_file(&temp);
+            return Err("Converted image exceeds 25 MB".into());
+        }
+        fs::rename(&temp, &path).map_err(|_| "Cannot finish cached image")?;
+        Ok(path.clone())
+    })
 }
 pub fn prune(dir: &Path, keep: &[PathBuf]) {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -188,5 +234,44 @@ pub fn apply(_app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
             "This Linux desktop is not supported yet. MVP supports GNOME, Cinnamon and MATE."
                 .into(),
         )
+    }
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+    #[test]
+    fn concurrent_foreground_and_prefetch_publish_once_and_failed_load_can_retry() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir =
+            std::env::temp_dir().join(format!("pinpaper-cache-test-{}", rand::random::<u64>()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("image.jpg");
+        let writes = AtomicUsize::new(0);
+        let barrier = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let (path, writes, barrier) = (&path, &writes, &barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    cache_once(path, || {
+                        writes.fetch_add(1, Ordering::SeqCst);
+                        fs::write(path, b"complete image").unwrap();
+                        Ok(path.clone())
+                    })
+                    .unwrap();
+                    assert_eq!(fs::read(path).unwrap(), b"complete image");
+                });
+            }
+        });
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+        let retry = dir.join("retry.jpg");
+        assert!(cache_once(&retry, || Err("temporary failure".into())).is_err());
+        cache_once(&retry, || {
+            fs::write(&retry, b"retried").unwrap();
+            Ok(retry.clone())
+        })
+        .unwrap();
+        fs::remove_dir_all(dir).unwrap();
     }
 }

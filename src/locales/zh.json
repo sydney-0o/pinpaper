@@ -36,7 +36,7 @@
   "addPictures": "添加 Pinterest 图片",
   "openFirst": "请先在第 1 步打开 Pinterest。",
   "addedCount": "图片集中的图片：{count}",
-  "addedNotice": "图片已添加。返回并点击“更换壁纸”。",
+  "addedNotice": "图片已添加并保存，无需再次应用选择或保存设置。返回并选择更换壁纸。",
   "retryHelp": "如果未成功，请返回第 1 步，再按三个步骤重试。",
   "retry": "查看步骤",
   "collections": "使用哪些图片",
@@ -108,5 +108,6 @@
   "trayPause": "暂停／继续自动更换",
   "trayQuit": "退出 Pinpaper",
   "browserTitle": "Pinterest — 登录并加载图片",
-  "verifyTitle": "Pinterest — 验证"
+  "verifyTitle": "Pinterest — 验证",
+  "minWidthHelp": "并非所有 Pinterest 图片的分辨率都足够适合你的屏幕。降低最小宽度可以使用更多图片，但清晰度可能会下降。"
 }
