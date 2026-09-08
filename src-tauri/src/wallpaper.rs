@@ -46,7 +46,32 @@ fn cache_once(
     }
     load()
 }
-pub fn first_usable<P, T>(
+/// Examine reusable files without network work, then permit just one new image.
+/// This prevents a single click from crawling an unverified collection.
+pub fn select_one_download<P, T>(
+    pins: impl IntoIterator<Item = P>,
+    mut ready: impl FnMut(&P) -> bool,
+    mut prepare: impl FnMut(P) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut first_missing = None;
+    let mut last = "No matching pictures".to_owned();
+    for pin in pins {
+        if ready(&pin) {
+            match prepare(pin) {
+                Ok(result) => return Ok(result),
+                Err(error) => last = error,
+            }
+        } else if first_missing.is_none() {
+            first_missing = Some(pin);
+        }
+    }
+    match first_missing {
+        Some(pin) => prepare(pin),
+        None => Err(last),
+    }
+}
+#[cfg(test)]
+fn first_usable<P, T>(
     pins: impl IntoIterator<Item = P>,
     mut prepare: impl FnMut(P) -> Result<T, String>,
 ) -> Result<T, String> {
@@ -284,6 +309,34 @@ mod download_tests {
             decode_oriented(png.into_inner()).unwrap().to_rgb8(),
             decoded.to_rgb8()
         );
+    }
+    #[test]
+    fn one_click_never_downloads_more_than_one_and_prefers_ready_files() {
+        let mut attempts = Vec::new();
+        assert!(select_one_download(
+            0..1000,
+            |_| false,
+            |n| {
+                attempts.push(n);
+                Err::<(), _>("too small".into())
+            }
+        )
+        .is_err());
+        assert_eq!(attempts, vec![0]);
+        attempts.clear();
+        assert_eq!(
+            select_one_download(
+                0..1000,
+                |n| *n == 7,
+                |n| {
+                    attempts.push(n);
+                    Ok(n)
+                }
+            )
+            .unwrap(),
+            7
+        );
+        assert_eq!(attempts, vec![7]);
     }
     #[test]
     fn selection_passes_five_rejections_and_stops_at_first_usable_picture() {

@@ -83,38 +83,42 @@ impl Engine {
             return Err("No matching pictures. Choose a collection in Pictures to use, add pictures, or relax your picture preferences.".into());
         }
         let settings = self.library.lock().unwrap().settings.clone();
-        let selected = wallpaper::first_usable(list, |pin| {
-            let path = wallpaper::download(&self.cache, &pin)?;
-            let (w, h) = match image::image_dimensions(&path) {
-                Ok(size) => size,
-                Err(_) => {
-                    // Only remove this corrupt file, so a future attempt can fetch it again.
-                    let _ = fs::remove_file(&path);
-                    return Err("Cached image could not be decoded".into());
-                }
-            };
-            {
-                let mut lib = self.library.lock().unwrap();
-                for candidate in lib
-                    .pins
-                    .iter_mut()
-                    .filter(|p| p.id == pin.id && p.board_id == pin.board_id)
+        let selected = wallpaper::select_one_download(
+            list,
+            |pin| wallpaper::quality_cache(&self.cache, pin).exists(),
+            |pin| {
+                let path = wallpaper::download(&self.cache, &pin)?;
+                let (w, h) = match image::image_dimensions(&path) {
+                    Ok(size) => size,
+                    Err(_) => {
+                        // Only remove this corrupt file, so a future attempt can fetch it again.
+                        let _ = fs::remove_file(&path);
+                        return Err("Cached image could not be decoded".into());
+                    }
+                };
                 {
-                    candidate.dimensions_verified = true;
-                    candidate.width = w;
-                    candidate.height = h;
+                    let mut lib = self.library.lock().unwrap();
+                    for candidate in lib
+                        .pins
+                        .iter_mut()
+                        .filter(|p| p.id == pin.id && p.board_id == pin.board_id)
+                    {
+                        candidate.dimensions_verified = true;
+                        candidate.width = w;
+                        candidate.height = h;
+                    }
                 }
-            }
-            if w < settings.min_width
-                || (settings.orientation == "landscape" && w <= h)
-                || (settings.orientation == "portrait" && h <= w)
-            {
-                return Err(
-                    "Downloaded images do not meet your resolution/orientation filters".into(),
-                );
-            }
-            Ok((pin, path, w, h))
-        });
+                if w < settings.min_width
+                    || (settings.orientation == "landscape" && w <= h)
+                    || (settings.orientation == "portrait" && h <= w)
+                {
+                    return Err(
+                        "Downloaded images do not meet your resolution/orientation filters".into(),
+                    );
+                }
+                Ok((pin, path, w, h))
+            },
+        );
         let (mut pin, path, w, h) = match selected {
             Ok(candidate) => candidate,
             Err(error) => {
@@ -156,7 +160,9 @@ fn exclusive<T>(e: &Engine, f: impl FnOnce() -> Result<T, String>) -> Result<T, 
     *e.error.lock().unwrap() = result.as_ref().err().cloned();
     drop(guard);
     let _ = e.app.emit_to("main", "pinpaper-changed", ());
-    let _ = e.warm.try_send(());
+    if result.is_ok() {
+        let _ = e.warm.try_send(());
+    }
     result
 }
 #[tauri::command]
