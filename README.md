@@ -34,7 +34,7 @@ The interface refreshes on changes and focus instead of polling every five secon
 
 A single event-driven worker prepares up to two upcoming candidates in the background after startup, imports, settings or wallpaper changes. Rapid requests are coalesced and candidates re-ranked between downloads; prefetch never changes history or applies a wallpaper. Foreground and background share one writer per URL, and completed files are reused. Background errors stay quiet with a five-minute retry cooldown; manual changes can retry immediately. There is no prefetch polling or unbounded download queue. The Change wallpaper button shows a spinner while a foreground change runs.
 
-Images download on demand or by bounded prefetch over HTTPS from pinimg.com, with redirects refused, a 25 MiB download limit and a 256 MiB image cache. Decoding limits dimensions to 16,384 pixels per axis and allocation to 256 MiB. Metadata, preferences, hidden flags and recent history live in library.json under Tauri's app-data directory for app.pinpaper.desktop. This metadata is not encrypted. On macOS the usual locations are ~/Library/Application Support/app.pinpaper.desktop and ~/Library/Caches/app.pinpaper.desktop.
+Images download on demand or by bounded prefetch over HTTPS from pinimg.com, with redirects refused, a 25 MiB download limit and a persistent disk image cache. Decoding limits dimensions to 16,384 pixels per axis and allocation to 256 MiB. Metadata, preferences, hidden flags and recent history live in library.json under Tauri's app-data directory for app.pinpaper.desktop. This metadata is not encrypted. On macOS the usual locations are ~/Library/Application Support/app.pinpaper.desktop and ~/Library/Caches/app.pinpaper.desktop.
 
 The scheduler checks every 15 seconds. Active hours use local time, support overnight ranges and treat equal endpoints as all day. Failed automatic changes wait five minutes before retrying. After sleep, at most one overdue change runs. Manual changes ignore active hours. Launch at login is not implemented. Only explicit imports add new pins.
 
@@ -79,7 +79,7 @@ npm run dev starts an interface-only browser preview. Development-only ?review=c
 
 ## Validation
 
-The current macOS release build and TypeScript/Vite build passed. Rust: 18 tests passed, one optional benchmark ignored. Node: seven tests passed, covering extraction, regional origins, all translation keys/placeholders and language fallback. A separately run synthetic preview benchmark measured approximately 57 ms for an initial 3840×2160 decode and 10 ms total for 1,000 cached reads. These are synthetic measurements, not live application profiling.
+The current macOS release build and TypeScript/Vite build passed. Rust: 19 tests passed, one optional benchmark ignored. Node: seven tests passed, covering extraction, regional origins, all translation keys/placeholders and language fallback. A separately run synthetic preview benchmark measured approximately 57 ms for an initial 3840×2160 decode and 10 ms total for 1,000 cached reads. These are synthetic measurements, not live application profiling.
 
 The running user instance was not closed, replaced or driven. Earlier browser layout checks covered 380×560 and 460×760; the final translated layout still needs full visual acceptance. The three-OS workflow in .github/workflows/build.yml is prepared but has not run remotely. Windows/Linux compilation and desktop behavior have not been verified here.
 
@@ -95,3 +95,5 @@ Manual acceptance should cover login and verification, scrolling Home and saved 
 - wallpaper.rs: bounded downloads and platform adapters.
 - language.rs: system language and native labels.
 - assets/leaf.svg and scripts/render-tray.py: tray artwork and reproducible rendering (Pillow).
+
+Downloaded JPEGs, including pictures rejected by current size filters, remain on disk until local data is reset. There is no automatic cache eviction. Change wallpaper checks all ranked candidates until one downloads and matches the actual resolution; there is no five-candidate cutoff. OS wallpaper-setting errors still stop immediately.

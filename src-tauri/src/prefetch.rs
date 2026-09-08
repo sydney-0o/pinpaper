@@ -38,9 +38,6 @@ pub fn start(engine: &Arc<Engine>, receiver: Receiver<()>) {
                 if path.exists() {
                     continue;
                 }
-                if !wallpaper::has_prefetch_room(&engine.cache) {
-                    break;
-                }
                 if wallpaper::download(&engine.cache, &pin).is_err() {
                     // Background failure is quiet. Manual Next can retry immediately.
                     failures.insert(pin.url.clone(), Instant::now());

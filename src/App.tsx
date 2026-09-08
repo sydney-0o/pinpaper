@@ -236,11 +236,12 @@ export default function App() {
     (pin) =>
       draft.board_ids.includes(pin.board_id) && library.feedback[pin.id] !== -1,
   ).length;
-  useEffect(() => setCollectionPage(0), [search, collectionSource, showHidden]);
-  useEffect(
-    () => window.scrollTo({ top: 0, behavior: "auto" }),
-    [page, currentPage],
-  );
+  useEffect(() => {
+    setCollectionPage(0);
+  }, [search, collectionSource, showHidden]);
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }, [page, currentPage]);
   useEffect(() => {
     if (error || state.error || notice)
       document.querySelector(".message")?.scrollIntoView({ block: "nearest" });
@@ -748,9 +749,9 @@ export default function App() {
                     </option>
                   ))}
                 </select>
-                <span className="field-help">{t("minWidthHelp")}</span>
               </label>
             </div>
+            <p className="field-help resolution-help">{t("minWidthHelp")}</p>
           </section>
           <section className="form-section">
             <h2>{t("autoTitle")}</h2>

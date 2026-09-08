@@ -82,72 +82,55 @@ impl Engine {
         if list.is_empty() {
             return Err("No matching pictures. Choose a collection in Pictures to use, add pictures, or relax your picture preferences.".into());
         }
-        let mut last = String::new();
-        for pin in list.into_iter().take(5) {
-            match wallpaper::download(&self.cache, &pin) {
-                Ok(path) => {
-                    let (settings, previous) = {
-                        let l = self.library.lock().unwrap();
-                        (
-                            l.settings.clone(),
-                            l.current
-                                .as_ref()
-                                .map(|p| wallpaper::cached(&self.cache, p)),
-                        )
-                    };
-                    let mut keep = vec![path.clone()];
-                    if let Some(p) = previous {
-                        keep.push(p);
-                    }
-                    wallpaper::prune(&self.cache, &keep);
-                    let (w, h) = image::image_dimensions(&path)
-                        .map_err(|_| "Cached image is invalid; disconnect and clear the cache")?;
-                    {
-                        let mut l = self.library.lock().unwrap();
-                        for candidate in l
-                            .pins
-                            .iter_mut()
-                            .filter(|p| p.id == pin.id && p.board_id == pin.board_id)
-                        {
-                            candidate.width = w;
-                            candidate.height = h;
-                        }
-                    }
-                    if w < settings.min_width
-                        || (settings.orientation == "landscape" && w <= h)
-                        || (settings.orientation == "portrait" && h <= w)
-                    {
-                        last = "Downloaded images do not meet your resolution/orientation filters"
-                            .into();
-                        continue;
-                    }
-                    wallpaper::apply(&self.app, &path)?;
-                    self.preview.lock().unwrap().clear();
-                    let mut lib = self.library.lock().unwrap();
-                    let mut pin = pin;
-                    pin.width = w;
-                    pin.height = h;
-                    lib.current = Some(pin.clone());
-                    lib.last_change = chrono::Utc::now().timestamp();
-                    lib.history.push(pin.id);
-                    if lib.history.len() > 30 {
-                        lib.history.remove(0);
-                    }
-                    self.save(&lib)?;
-                    let mut keep = vec![path];
-                    keep.extend(
-                        model::ranked(&lib)
-                            .iter()
-                            .take(2)
-                            .map(|p| wallpaper::cached(&self.cache, p)),
-                    );
-                    wallpaper::prune(&self.cache, &keep);
-                    return Ok(());
+        let settings = self.library.lock().unwrap().settings.clone();
+        let selected = wallpaper::first_usable(list, |pin| {
+            let path = wallpaper::download(&self.cache, &pin)?;
+            let (w, h) = match image::image_dimensions(&path) {
+                Ok(size) => size,
+                Err(_) => {
+                    // Only remove this corrupt file, so a future attempt can fetch it again.
+                    let _ = fs::remove_file(&path);
+                    return Err("Cached image could not be decoded".into());
                 }
-                Err(e) => last = e,
+            };
+            {
+                let mut lib = self.library.lock().unwrap();
+                for candidate in lib
+                    .pins
+                    .iter_mut()
+                    .filter(|p| p.id == pin.id && p.board_id == pin.board_id)
+                {
+                    candidate.width = w;
+                    candidate.height = h;
+                }
             }
+            if w < settings.min_width
+                || (settings.orientation == "landscape" && w <= h)
+                || (settings.orientation == "portrait" && h <= w)
+            {
+                return Err(
+                    "Downloaded images do not meet your resolution/orientation filters".into(),
+                );
+            }
+            Ok((pin, path, w, h))
+        });
+        // Persist discovered dimensions even when every candidate was unsuitable.
+        self.save(&self.library.lock().unwrap())?;
+        let (mut pin, path, w, h) = selected?;
+        // OS adapter failures are not image failures: stop instead of downloading the library.
+        wallpaper::apply(&self.app, &path)?;
+        self.preview.lock().unwrap().clear();
+        let mut lib = self.library.lock().unwrap();
+        pin.width = w;
+        pin.height = h;
+        lib.current = Some(pin.clone());
+        lib.last_change = chrono::Utc::now().timestamp();
+        lib.history.push(pin.id);
+        if lib.history.len() > 30 {
+            lib.history.remove(0);
         }
-        Err(last)
+        self.save(&lib)?;
+        Ok(())
     }
 }
 fn exclusive<T>(e: &Engine, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {

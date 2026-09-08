@@ -8,7 +8,6 @@ use std::{
     sync::{Arc, Mutex, OnceLock, Weak},
 };
 const MAX_DOWNLOAD: u64 = 25 * 1024 * 1024;
-const CACHE_LIMIT: u64 = 256 * 1024 * 1024;
 pub fn cached(dir: &Path, pin: &Pin) -> PathBuf {
     dir.join(format!("{:x}.jpg", Sha256::digest(pin.url.as_bytes())))
 }
@@ -36,15 +35,18 @@ fn cache_once(
     }
     load()
 }
-pub fn has_prefetch_room(dir: &Path) -> bool {
-    let total: u64 = fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| e.metadata().ok())
-        .map(|m| m.len())
-        .sum();
-    total < CACHE_LIMIT.saturating_sub(MAX_DOWNLOAD)
+pub fn first_usable<P, T>(
+    pins: impl IntoIterator<Item = P>,
+    mut prepare: impl FnMut(P) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut last = "No matching pictures".to_owned();
+    for pin in pins {
+        match prepare(pin) {
+            Ok(candidate) => return Ok(candidate),
+            Err(error) => last = error,
+        }
+    }
+    Err(format!("No suitable downloadable pictures remain. {last}"))
 }
 pub fn download(dir: &Path, pin: &Pin) -> Result<PathBuf, String> {
     if !network::valid_image_url(&pin.url) {
@@ -106,32 +108,6 @@ pub fn download(dir: &Path, pin: &Pin) -> Result<PathBuf, String> {
         fs::rename(&temp, &path).map_err(|_| "Cannot finish cached image")?;
         Ok(path.clone())
     })
-}
-pub fn prune(dir: &Path, keep: &[PathBuf]) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    let mut files: Vec<_> = entries
-        .flatten()
-        .filter_map(|e| {
-            let p = e.path();
-            if p.extension()?.to_str()? != "jpg" {
-                return None;
-            }
-            let m = e.metadata().ok()?;
-            Some((p, m.len(), m.modified().ok()?))
-        })
-        .collect();
-    let mut total: u64 = files.iter().map(|f| f.1).sum();
-    files.sort_by_key(|f| f.2);
-    for (path, size, _) in files {
-        if total <= CACHE_LIMIT {
-            break;
-        }
-        if !keep.contains(&path) && fs::remove_file(path).is_ok() {
-            total = total.saturating_sub(size);
-        }
-    }
 }
 #[cfg(target_os = "macos")]
 pub fn apply(app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
@@ -240,6 +216,28 @@ pub fn apply(_app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod download_tests {
     use super::*;
+    #[test]
+    fn selection_passes_five_rejections_and_stops_at_first_usable_picture() {
+        let mut visited = Vec::new();
+        let found = first_usable(0..10, |n| {
+            visited.push(n);
+            if n < 7 {
+                Err("too small".into())
+            } else {
+                Ok(n)
+            }
+        })
+        .unwrap();
+        assert_eq!(found, 7);
+        assert_eq!(visited, (0..8).collect::<Vec<_>>());
+        let mut count = 0;
+        assert!(first_usable(0..9, |_| {
+            count += 1;
+            Err::<(), _>("unavailable".into())
+        })
+        .is_err());
+        assert_eq!(count, 9);
+    }
     #[test]
     fn concurrent_foreground_and_prefetch_publish_once_and_failed_load_can_retry() {
         use std::sync::atomic::{AtomicUsize, Ordering};

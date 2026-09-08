@@ -950,3 +950,24 @@ label {
 .primary[aria-busy="true"] .spin {
   flex-shrink: 0;
 }
+
+.split {
+  align-items: flex-start;
+}
+.split > label {
+  min-width: 0;
+  flex: 1;
+}
+.resolution-help {
+  margin: 10px 0 0;
+  max-width: none;
+}
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  min-height: 44px;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='m4 6 4 4 4-4' fill='none' stroke='%2364705e' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+}
