@@ -78,16 +78,27 @@ impl Engine {
         self.changing.store(true, Ordering::SeqCst);
         let _changing = Changing(self);
         let _ = self.app.emit_to("main", "pinpaper-changed", ());
-        let list = model::ranked(&self.library.lock().unwrap());
+        let list: Vec<_> = model::ranked(&self.library.lock().unwrap())
+            .into_iter()
+            .filter(|pin| {
+                wallpaper::cached(&self.cache, pin).exists()
+                    || !wallpaper::temporarily_unavailable(pin)
+            })
+            .collect();
         if list.is_empty() {
             return Err("No matching pictures. Choose a collection in Pictures to use, add pictures, or relax your picture preferences.".into());
         }
         let settings = self.library.lock().unwrap().settings.clone();
         let selected = wallpaper::select_one_download(
             list,
-            |pin| wallpaper::quality_cache(&self.cache, pin).exists(),
+            |pin| wallpaper::cached(&self.cache, pin).exists(),
             |pin| {
-                let path = wallpaper::download(&self.cache, &pin)?;
+                let existing = wallpaper::cached(&self.cache, &pin);
+                let path = if existing.exists() {
+                    existing
+                } else {
+                    wallpaper::download(&self.cache, &pin)?
+                };
                 let (w, h) = match image::image_dimensions(&path) {
                     Ok(size) => size,
                     Err(_) => {

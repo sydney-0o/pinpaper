@@ -109,5 +109,6 @@
   "trayQuit": "退出 Pinpaper",
   "browserTitle": "Pinterest — 登录并加载图片",
   "verifyTitle": "Pinterest — 验证",
-  "minWidthHelp": "并非所有 Pinterest 图片的分辨率都足够适合你的屏幕。降低最小宽度可以使用更多图片，但清晰度可能会下降。"
+  "minWidthHelp": "并非所有 Pinterest 图片的分辨率都足够适合你的屏幕。降低最小宽度可以使用更多图片，但清晰度可能会下降。",
+  "errorForbidden": "Pinterest 拒绝下载这张图片。再次点击更换壁纸以尝试另一张。如果问题持续，请重新导入 Pinterest 中已加载的图片以更新链接。"
 }

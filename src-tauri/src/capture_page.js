@@ -62,12 +62,8 @@
       continue;
     try {
       const u = new URL(img.currentSrc || img.src);
-      // Pinterest thumbnails often have an original counterpart. Dimensions remain
-      // unknown until the native downloader validates the actual image.
-      u.pathname = u.pathname.replace(
-        /^\/(?:\d+x(?:\d+)?(?:_[^/]+)?)\//,
-        "/originals/",
-      );
+      // Keep the actual loaded URL as fallback. The native downloader requests
+      // its original counterpart first without losing this known source.
       add({
         id,
         title: (img.alt || "").slice(0, 300),

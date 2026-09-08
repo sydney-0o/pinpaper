@@ -84,13 +84,22 @@ fn first_usable<P, T>(
     }
     Err(format!("No suitable downloadable pictures remain. {last}"))
 }
+fn failures() -> &'static Mutex<HashMap<String, std::time::Instant>> {
+    static FAILURES: OnceLock<Mutex<HashMap<String, std::time::Instant>>> = OnceLock::new();
+    FAILURES.get_or_init(Default::default)
+}
+pub fn temporarily_unavailable(pin: &Pin) -> bool {
+    let mut failures = failures().lock().unwrap();
+    failures.retain(|_, since| since.elapsed() < std::time::Duration::from_secs(300));
+    failures.contains_key(&pin.url)
+}
 pub fn download(dir: &Path, pin: &Pin) -> Result<PathBuf, String> {
     if !network::valid_image_url(&pin.url) {
         return Err("Image is not hosted on Pinterest's image CDN".into());
     }
     fs::create_dir_all(dir).map_err(|_| "Cannot create image cache")?;
     let path = quality_cache(dir, pin);
-    cache_once(&path, || {
+    let result = cache_once(&path, || {
         let client = network::client()?;
         let original = network::original_url(&pin.url);
         let mut response = client.get(&original).send().map_err(|error| {
@@ -101,7 +110,7 @@ pub fn download(dir: &Path, pin: &Pin) -> Result<PathBuf, String> {
             }
         })?;
         // Fall back only when the original is absent, never because of a timeout.
-        if original != pin.url && matches!(response.status().as_u16(), 404 | 410) {
+        if original != pin.url && matches!(response.status().as_u16(), 403 | 404 | 410) {
             response = client
                 .get(&pin.url)
                 .send()
@@ -148,7 +157,14 @@ pub fn download(dir: &Path, pin: &Pin) -> Result<PathBuf, String> {
         fs::rename(&temp, &path).map_err(|_| "Cannot finish cached image")?;
         let _ = crate::preview::prepare(&path, &decoded);
         Ok(path.clone())
-    })
+    });
+    if result.is_err() {
+        failures()
+            .lock()
+            .unwrap()
+            .insert(pin.url.clone(), std::time::Instant::now());
+    }
+    result
 }
 fn decode_oriented(bytes: Vec<u8>) -> Result<image::DynamicImage, String> {
     use image::ImageDecoder;

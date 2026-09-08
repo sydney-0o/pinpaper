@@ -25,7 +25,9 @@ pub fn start(engine: &Arc<Engine>, receiver: Receiver<()>) {
                 let candidate = model::ranked(&engine.library.lock().unwrap())
                     .into_iter()
                     .take(2)
-                    .find(|p| !attempted.contains(&p.url));
+                    .find(|p| {
+                        !attempted.contains(&p.url) && !wallpaper::temporarily_unavailable(p)
+                    });
                 let Some(pin) = candidate else { break };
                 attempted.push(pin.url.clone());
                 if failures

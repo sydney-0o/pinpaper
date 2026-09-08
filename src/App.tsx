@@ -256,7 +256,7 @@ export default function App() {
   }
   const problem = error || state.error;
   const errorHint =
-    problem === "preview"
+    problem?.includes("403") ? t("errorForbidden") : problem === "preview"
       ? t("previewOnly")
       : problem?.includes("No Pinterest page") ||
           problem?.includes("sign-in") ||

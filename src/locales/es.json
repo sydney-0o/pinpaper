@@ -109,5 +109,6 @@
   "trayQuit": "Salir de Pinpaper",
   "browserTitle": "Pinterest — inicia sesión y carga imágenes",
   "verifyTitle": "Pinterest — verificación",
-  "minWidthHelp": "No todas las imágenes de Pinterest tienen suficiente resolución para tu pantalla. Reducir el ancho mínimo permite usar más imágenes, pero pueden verse menos nítidas."
+  "minWidthHelp": "No todas las imágenes de Pinterest tienen suficiente resolución para tu pantalla. Reducir el ancho mínimo permite usar más imágenes, pero pueden verse menos nítidas.",
+  "errorForbidden": "Pinterest rechazó la descarga. Pulsa Cambiar fondo para probar otra imagen. Si se repite, importa de nuevo las imágenes cargadas en Pinterest para actualizar los enlaces."
 }

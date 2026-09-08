@@ -84,7 +84,7 @@ test("structured data chooses largest image, deduplicates and excludes video", a
   assert.equal(result.pins.length, 1);
   assert.equal(result.pins[0].width, 2000);
 });
-test("loaded DOM pins request original image without inventing dimensions", async () => {
+test("loaded DOM pins preserve a fallback source without inventing dimensions", async () => {
   const result = await capture({
     anchors: [
       {
@@ -98,7 +98,7 @@ test("loaded DOM pins request original image without inventing dimensions", asyn
       },
     ],
   });
-  assert.equal(result.pins[0].url, "https://i.pinimg.com/originals/a.jpg");
+  assert.equal(result.pins[0].url, "https://i.pinimg.com/736x/a.jpg");
   assert.equal(result.pins[0].width, 0);
   assert.equal(result.pins[0].height, 0);
 });

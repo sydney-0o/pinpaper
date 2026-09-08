@@ -109,5 +109,6 @@
   "trayQuit": "Quit Pinpaper",
   "browserTitle": "Pinterest — sign in and load pictures",
   "verifyTitle": "Pinterest — verification",
-  "minWidthHelp": "Not every Pinterest picture is large enough for your screen. Lowering the minimum width makes more pictures available, but they may look less sharp."
+  "minWidthHelp": "Not every Pinterest picture is large enough for your screen. Lowering the minimum width makes more pictures available, but they may look less sharp.",
+  "errorForbidden": "Pinterest refused this image download. Choose Change wallpaper again to try another picture. If this repeats, import the loaded Pinterest pictures again to refresh their links."
 }
