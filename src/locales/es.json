@@ -98,6 +98,9 @@
   "working": "Espera…",
   "adding": "Añadiendo imágenes…",
   "changing": "Cambiando el fondo…",
+  "searchingFirst": "Buscando un fondo… intento {attempt} de {max}.",
+  "searchingNext": "Esta imagen no funcionó. Buscando el siguiente fondo… intento {attempt} de {max}.",
+  "searchingApply": "Fondo encontrado. Aplicándolo…",
   "errorTitle": "Todavía no ha funcionado.",
   "errorNoPage": "Abre Pinterest desde el paso 1, inicia sesión y abre Inicio o un tablero guardado antes de añadir imágenes.",
   "errorNoPins": "Baja en la ventana de Pinterest y espera a que carguen las imágenes; después vuelve a añadirlas.",
@@ -110,5 +113,6 @@
   "browserTitle": "Pinterest — inicia sesión y carga imágenes",
   "verifyTitle": "Pinterest — verificación",
   "minWidthHelp": "No todas las imágenes de Pinterest tienen suficiente resolución para tu pantalla. Reducir el ancho mínimo permite usar más imágenes, pero pueden verse menos nítidas.",
-  "errorForbidden": "Pinterest rechazó la descarga. Pulsa Cambiar fondo para probar otra imagen. Si se repite, importa de nuevo las imágenes cargadas en Pinterest para actualizar los enlaces."
+  "errorForbidden": "Pinterest rechazó la descarga. Pulsa Cambiar fondo para probar otra imagen. Si se repite, importa de nuevo las imágenes cargadas en Pinterest para actualizar los enlaces.",
+  "retrySearch": "No se pudo usar esa imagen. Pinpaper buscó los siguientes fondos y se detuvo al alcanzar el límite de intentos. Inténtalo más tarde o vuelve a importar las imágenes de Pinterest."
 }

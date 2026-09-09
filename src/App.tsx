@@ -50,10 +50,19 @@ type Snapshot = {
   browser_open: boolean;
   busy: boolean;
   changing: boolean;
+  change_status: {
+    phase: "searching" | "retrying" | "applying";
+    attempt: number;
+    max_attempts: number;
+  } | null;
   error: string | null;
   preview: string | null;
   locale: string;
 };
+const WIDTH_OPTIONS = [
+  0, 720, 1080, 1280, 1366, 1440, 1600, 1920, 2048, 2560, 2880, 3000, 3200,
+  3440, 3840, 4096, 5120, 6016, 7680,
+];
 const defaults: Settings = {
   interval_minutes: 60,
   active_start: 8,
@@ -81,6 +90,7 @@ const initial: Snapshot = {
   browser_open: false,
   busy: false,
   changing: false,
+  change_status: null,
   error: null,
   preview: null,
   locale: resolveLanguage(navigator.languages),
@@ -258,6 +268,9 @@ export default function App() {
   const errorHint =
     problem?.includes("403") ? t("errorForbidden") : problem === "preview"
       ? t("previewOnly")
+      : problem?.includes("Wallpaper search paused") ||
+          problem?.includes("No suitable wallpapers")
+        ? t("retrySearch")
       : problem?.includes("No Pinterest page") ||
           problem?.includes("sign-in") ||
           problem?.includes("signing in")
@@ -270,6 +283,21 @@ export default function App() {
             : t("retryHelp");
   const hasSelection =
     library.settings.board_ids.length > 0 && library.pins.length > 0;
+  const changeStatus = state.change_status;
+  const changeLabel =
+    changeStatus?.phase === "retrying"
+      ? t("searchingNext", {
+          attempt: n(changeStatus.attempt),
+          max: n(changeStatus.max_attempts),
+        })
+      : changeStatus?.phase === "applying"
+        ? t("searchingApply")
+        : changeStatus?.phase === "searching"
+          ? t("searchingFirst", {
+              attempt: n(changeStatus.attempt),
+              max: n(changeStatus.max_attempts),
+            })
+          : t("changing");
   return (
     <main className={`page-${page}`}>
       <header>
@@ -352,7 +380,7 @@ export default function App() {
               (busy && ["next_wallpaper", "feedback"].includes(operation)) ? (
                 <>
                   <LoaderCircle className="spin" size={19} />
-                  <span role="status">{t("changing")}</span>
+                  <span role="status">{changeLabel}</span>
                 </>
               ) : (
                 <>
@@ -743,7 +771,7 @@ export default function App() {
                   value={draft.min_width}
                   onChange={(e) => update("min_width", Number(e.target.value))}
                 >
-                  {[0, 720, 1280, 1920, 2560, 3840].map((width) => (
+                  {WIDTH_OPTIONS.map((width) => (
                     <option value={width} key={width}>
                       {width ? `${n(width)} px` : t("anySize")}
                     </option>

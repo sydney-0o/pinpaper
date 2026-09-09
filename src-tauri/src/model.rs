@@ -83,6 +83,11 @@ pub struct Library {
     pub pins: Vec<Pin>,
     pub feedback: HashMap<String, i8>,
     pub history: Vec<String>,
+    /// Stable board/pin keys already used in the current rotation history.
+    /// Keeping this separately from the short display history lets a round
+    /// span more than thirty pins and survive an application restart.
+    #[serde(default)]
+    pub rotation_seen: Vec<String>,
     pub current: Option<Pin>,
     pub last_change: i64,
     pub last_sync: i64,
@@ -104,7 +109,11 @@ pub fn ranked(lib: &Library) -> Vec<Pin> {
             let tokens = words(&format!("{} {}", p.title, p.description));
             lib.settings.board_ids.contains(&p.board_id)
                 && lib.feedback.get(&p.id) != Some(&-1)
-                && lib.current.as_ref().map(|c| c.id != p.id).unwrap_or(true)
+                && lib
+                    .current
+                    .as_ref()
+                    .map(|c| c.id != p.id || c.board_id != p.board_id)
+                    .unwrap_or(true)
                 && ((p.board_id == crate::browser_session::SOURCE
                     && (!p.dimensions_verified || (p.width == 0 && p.height == 0)))
                     || (p.width >= lib.settings.min_width
@@ -118,17 +127,55 @@ pub fn ranked(lib: &Library) -> Vec<Pin> {
         })
         .map(|p| {
             let tokens = words(&format!("{} {}", p.title, p.description));
-            let score = wanted.iter().filter(|w| tokens.contains(w)).count() as f64 * 4.0
-                - if lib.history.contains(&p.id) {
-                    100.0
-                } else {
-                    0.0
-                };
+            // Rotation is applied after ranking. Keeping the ranking stable
+            // within a round means preferred keywords retain their order and
+            // a new round starts predictably after every eligible pin was used.
+            let score = wanted.iter().filter(|w| tokens.contains(w)).count() as f64 * 4.0;
             (score, p.clone())
         })
         .collect();
     results.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.id.cmp(&b.1.id)));
     results.into_iter().map(|(_, p)| p).collect()
+}
+
+pub fn rotation_key(pin: &Pin) -> String {
+    format!("{}:{}", pin.board_id, pin.id)
+}
+
+fn was_seen(lib: &Library, pin: &Pin) -> bool {
+    let key = rotation_key(pin);
+    lib.rotation_seen.iter().any(|seen| seen == &key)
+        // Libraries written before rotation_seen was introduced only have a
+        // short history. Treat it as already used during migration so the
+        // first round after an upgrade does not immediately repeat pictures.
+        || lib.history.iter().any(|seen| seen == &pin.id)
+}
+
+/// Return candidates in rank order, using every unseen eligible picture before
+/// starting another pass through the collection. Current, hidden, source and
+/// preference filters are all applied by `ranked` first.
+pub fn rotation_candidates(lib: &Library) -> Vec<Pin> {
+    let ranked = ranked(lib);
+    if ranked.iter().any(|pin| !was_seen(lib, pin)) {
+        ranked
+            .into_iter()
+            .filter(|pin| !was_seen(lib, pin))
+            .collect()
+    } else {
+        ranked
+    }
+}
+
+/// Mark a pin as used only after the operating system accepted it as the new
+/// wallpaper. Stale keys are pruned so repeated imports do not grow the file
+/// forever while still preserving the round for all current pins.
+pub fn record_rotation(lib: &mut Library, pin: &Pin) {
+    let key = rotation_key(pin);
+    if !lib.rotation_seen.iter().any(|seen| seen == &key) {
+        lib.rotation_seen.push(key);
+    }
+    let current_keys: std::collections::HashSet<_> = lib.pins.iter().map(rotation_key).collect();
+    lib.rotation_seen.retain(|seen| current_keys.contains(seen));
 }
 #[cfg(test)]
 mod tests {
@@ -191,7 +238,7 @@ mod tests {
         assert!(ranked(&lib).is_empty());
     }
     #[test]
-    fn ranking_respects_feedback_filters_and_history() {
+    fn ranking_respects_feedback_filters_and_keeps_keyword_order() {
         let mut l = Library::default();
         l.settings.board_ids = vec!["b".into()];
         l.settings.keywords = "forest".into();
@@ -200,11 +247,67 @@ mod tests {
         assert_eq!(ranked(&l)[0].id, "2");
         assert_eq!(ranked(&l).len(), 2);
         l.history.push("2".into());
-        assert_eq!(ranked(&l)[0].id, "1");
+        assert_eq!(ranked(&l)[0].id, "2");
         l.settings.exclude = "forest".into();
         assert_eq!(ranked(&l).len(), 1);
         l.settings.min_width = 4000;
         assert!(ranked(&l).is_empty());
+    }
+
+    #[test]
+    fn rotation_uses_every_unseen_pin_before_starting_next_round() {
+        let mut lib = Library::default();
+        lib.settings.board_ids = vec!["b".into()];
+        lib.pins = (0..40)
+            .map(|index| pin(&index.to_string(), "landscape"))
+            .collect();
+        assert_eq!(rotation_candidates(&lib).len(), 40);
+
+        for index in 0..35 {
+            let pin = lib.pins[index].clone();
+            record_rotation(&mut lib, &pin);
+        }
+        let remaining: Vec<_> = rotation_candidates(&lib)
+            .into_iter()
+            .map(|pin| pin.id)
+            .collect();
+        assert_eq!(remaining.len(), 5);
+        assert_eq!(remaining[0], "35");
+
+        for index in 35..40 {
+            let pin = lib.pins[index].clone();
+            record_rotation(&mut lib, &pin);
+        }
+        assert_eq!(rotation_candidates(&lib).len(), 40);
+    }
+
+    #[test]
+    fn rotation_state_survives_serialization_and_respects_filters() {
+        let mut lib = Library::default();
+        lib.settings.board_ids = vec!["b".into()];
+        lib.pins = vec![pin("1", "one"), pin("2", "two"), pin("3", "three")];
+        let used = lib.pins[0].clone();
+        record_rotation(&mut lib, &used);
+        let restored: Library = serde_json::from_slice(&serde_json::to_vec(&lib).unwrap()).unwrap();
+        assert_eq!(rotation_candidates(&restored)[0].id, "2");
+
+        let mut filtered = restored;
+        filtered.feedback.insert("2".into(), -1);
+        filtered.settings.board_ids = vec!["other".into()];
+        assert!(rotation_candidates(&filtered).is_empty());
+        filtered.settings.board_ids = vec!["b".into()];
+        assert_eq!(rotation_candidates(&filtered)[0].id, "3");
+    }
+
+    #[test]
+    fn rotation_record_only_keeps_current_library_keys() {
+        let mut lib = Library::default();
+        lib.settings.board_ids = vec!["b".into()];
+        lib.pins = vec![pin("1", "one")];
+        lib.rotation_seen = vec!["b:1".into(), "b:removed".into()];
+        let pin = lib.pins[0].clone();
+        record_rotation(&mut lib, &pin);
+        assert_eq!(lib.rotation_seen, vec!["b:1"]);
     }
 }
 

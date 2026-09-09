@@ -98,6 +98,9 @@
   "working": "Please wait…",
   "adding": "Adding pictures…",
   "changing": "Setting your wallpaper…",
+  "searchingFirst": "Looking for a wallpaper… attempt {attempt} of {max}.",
+  "searchingNext": "This picture did not work. Looking for the next wallpaper… attempt {attempt} of {max}.",
+  "searchingApply": "Wallpaper found. Applying it…",
   "errorTitle": "That did not work yet.",
   "errorNoPage": "Open Pinterest from step 1, sign in, and open Home or a saved board before adding pictures.",
   "errorNoPins": "Scroll down in the Pinterest window and wait for pictures to load, then try adding them again.",
@@ -110,5 +113,6 @@
   "browserTitle": "Pinterest — sign in and load pictures",
   "verifyTitle": "Pinterest — verification",
   "minWidthHelp": "Not every Pinterest picture is large enough for your screen. Lowering the minimum width makes more pictures available, but they may look less sharp.",
-  "errorForbidden": "Pinterest refused this image download. Choose Change wallpaper again to try another picture. If this repeats, import the loaded Pinterest pictures again to refresh their links."
+  "errorForbidden": "Pinterest refused this image download. Choose Change wallpaper again to try another picture. If this repeats, import the loaded Pinterest pictures again to refresh their links.",
+  "retrySearch": "That picture could not be used. Pinpaper searched the next wallpapers and paused after its retry limit. Try again later or re-import the Pinterest pictures."
 }

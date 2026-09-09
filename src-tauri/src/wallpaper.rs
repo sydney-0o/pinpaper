@@ -1,13 +1,16 @@
 use crate::{model::Pin, network};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     io::Read,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock, Weak},
+    time::{Duration, Instant},
 };
 const MAX_DOWNLOAD: u64 = 25 * 1024 * 1024;
+pub const MAX_FOREGROUND_ATTEMPTS: usize = 8;
+pub const FOREGROUND_SEARCH_BUDGET: Duration = Duration::from_secs(90);
 pub fn quality_cache(dir: &Path, pin: &Pin) -> PathBuf {
     dir.join(format!(
         "lossless-v2-{:x}.png",
@@ -46,29 +49,80 @@ fn cache_once(
     }
     load()
 }
-/// Examine reusable files without network work, then permit just one new image.
-/// This prevents a single click from crawling an unverified collection.
-pub fn select_one_download<P, T>(
+#[derive(Debug)]
+pub struct SelectionFailure {
+    pub attempts: usize,
+    pub max_attempts: usize,
+    pub candidates: usize,
+    pub exhausted_budget: bool,
+    pub errors: Vec<String>,
+}
+
+/// Try reusable candidates first, then download candidates one at a time with
+/// a finite attempt/time budget. Candidate keys are deduplicated before any
+/// preparation work so a failing pin or URL cannot be retried in one click.
+pub fn select_bounded<P, T>(
     pins: impl IntoIterator<Item = P>,
     mut ready: impl FnMut(&P) -> bool,
+    mut candidate_keys: impl FnMut(&P) -> (String, String),
+    max_attempts: usize,
+    time_budget: Duration,
+    mut on_attempt: impl FnMut(usize, &P),
+    mut on_failure: impl FnMut(usize, &P, &str),
     mut prepare: impl FnMut(P) -> Result<T, String>,
-) -> Result<T, String> {
-    let mut first_missing = None;
-    let mut last = "No matching pictures".to_owned();
-    for pin in pins {
+) -> Result<T, SelectionFailure>
+where
+    P: Clone,
+{
+    let mut ids = HashSet::new();
+    let mut urls = HashSet::new();
+    let candidates: Vec<P> = pins
+        .into_iter()
+        .filter(|pin| {
+            let (id, url) = candidate_keys(pin);
+            ids.insert(id) && urls.insert(url)
+        })
+        .collect();
+    let candidate_count = candidates.len();
+    let mut reusable = Vec::new();
+    let mut missing = Vec::new();
+    for pin in candidates {
         if ready(&pin) {
-            match prepare(pin) {
-                Ok(result) => return Ok(result),
-                Err(error) => last = error,
-            }
-        } else if first_missing.is_none() {
-            first_missing = Some(pin);
+            reusable.push(pin);
+        } else {
+            missing.push(pin);
         }
     }
-    match first_missing {
-        Some(pin) => prepare(pin),
-        None => Err(last),
+    let ordered = reusable.into_iter().chain(missing).collect::<Vec<_>>();
+    let deadline = Instant::now() + time_budget;
+    let mut errors = Vec::new();
+    let mut attempts = 0;
+    let mut exhausted_budget = max_attempts == 0 || time_budget.is_zero();
+    for pin in &ordered {
+        if exhausted_budget
+            || attempts >= max_attempts
+            || (attempts > 0 && Instant::now() >= deadline)
+        {
+            exhausted_budget = true;
+            break;
+        }
+        attempts += 1;
+        on_attempt(attempts, pin);
+        match prepare(pin.clone()) {
+            Ok(result) => return Ok(result),
+            Err(error) => {
+                on_failure(attempts, pin, &error);
+                errors.push(error);
+            }
+        }
     }
+    Err(SelectionFailure {
+        attempts,
+        max_attempts,
+        candidates: candidate_count,
+        exhausted_budget,
+        errors,
+    })
 }
 #[cfg(test)]
 fn first_usable<P, T>(
@@ -346,34 +400,6 @@ mod download_tests {
         );
     }
     #[test]
-    fn one_click_never_downloads_more_than_one_and_prefers_ready_files() {
-        let mut attempts = Vec::new();
-        assert!(select_one_download(
-            0..1000,
-            |_| false,
-            |n| {
-                attempts.push(n);
-                Err::<(), _>("too small".into())
-            }
-        )
-        .is_err());
-        assert_eq!(attempts, vec![0]);
-        attempts.clear();
-        assert_eq!(
-            select_one_download(
-                0..1000,
-                |n| *n == 7,
-                |n| {
-                    attempts.push(n);
-                    Ok(n)
-                }
-            )
-            .unwrap(),
-            7
-        );
-        assert_eq!(attempts, vec![7]);
-    }
-    #[test]
     fn selection_passes_five_rejections_and_stops_at_first_usable_picture() {
         let mut visited = Vec::new();
         let found = first_usable(0..10, |n| {
@@ -394,6 +420,102 @@ mod download_tests {
         })
         .is_err());
         assert_eq!(count, 9);
+    }
+
+    #[test]
+    fn bounded_selection_advances_after_a_failed_download_and_reports_progress() {
+        let mut attempts = Vec::new();
+        let mut failures = Vec::new();
+        let result = select_bounded(
+            0..4,
+            |_| false,
+            |n| (n.to_string(), n.to_string()),
+            4,
+            Duration::from_secs(5),
+            |attempt, pin| attempts.push((attempt, *pin)),
+            |attempt, pin, error| failures.push((attempt, *pin, error.to_owned())),
+            |pin| {
+                if pin < 2 {
+                    Err(format!("download failed for {pin}"))
+                } else {
+                    Ok(pin)
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(result, 2);
+        assert_eq!(attempts, vec![(1, 0), (2, 1), (3, 2)]);
+        assert_eq!(failures.len(), 2);
+        assert_eq!(failures[0].0, 1);
+        assert_eq!(failures[1].1, 1);
+    }
+
+    #[test]
+    fn bounded_selection_stops_at_attempt_budget_without_crawling_library() {
+        let mut attempts = Vec::new();
+        let failure = select_bounded(
+            0..100,
+            |_| false,
+            |n| (n.to_string(), n.to_string()),
+            3,
+            Duration::from_secs(5),
+            |_, pin| attempts.push(*pin),
+            |_, _, _| {},
+            |_| Err::<(), _>("unavailable".into()),
+        )
+        .unwrap_err();
+        assert_eq!(attempts, vec![0, 1, 2]);
+        assert_eq!(failure.attempts, 3);
+        assert!(failure.exhausted_budget);
+        assert_eq!(failure.candidates, 100);
+    }
+
+    #[test]
+    fn bounded_selection_deduplicates_pin_and_url_keys() {
+        let mut attempts = Vec::new();
+        let result = select_bounded(
+            vec![
+                ("pin-a", "url-a"),
+                ("pin-a", "url-a-variant"),
+                ("pin-b", "url-a"),
+                ("pin-c", "url-c"),
+            ],
+            |_| false,
+            |(pin, url)| (pin.to_string(), url.to_string()),
+            5,
+            Duration::from_secs(5),
+            |_, candidate| attempts.push(*candidate),
+            |_, _, _| {},
+            |candidate| {
+                if candidate.0 == "pin-c" {
+                    Ok(candidate.0)
+                } else {
+                    Err("refused".into())
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(result, "pin-c");
+        assert_eq!(attempts, vec![("pin-a", "url-a"), ("pin-c", "url-c")]);
+    }
+
+    #[test]
+    fn bounded_selection_reports_a_zero_budget_without_attempting() {
+        let mut attempts = 0;
+        let failure = select_bounded(
+            0..10,
+            |_| false,
+            |n| (n.to_string(), n.to_string()),
+            8,
+            Duration::ZERO,
+            |_, _| attempts += 1,
+            |_, _, _| {},
+            |_| Err::<(), _>("network unavailable".into()),
+        )
+        .unwrap_err();
+        assert_eq!(attempts, 0);
+        assert!(failure.exhausted_budget);
+        assert_eq!(failure.attempts, 0);
     }
     #[test]
     fn concurrent_foreground_and_prefetch_publish_once_and_failed_load_can_retry() {

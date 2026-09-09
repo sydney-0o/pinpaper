@@ -29,12 +29,19 @@ struct Engine {
     error: Mutex<Option<String>>,
     busy: AtomicBool,
     changing: AtomicBool,
+    change_status: Mutex<Option<ChangeStatus>>,
     warm: std::sync::mpsc::SyncSender<()>,
     browser_connected: AtomicBool,
     bridge: browser_session::ImportBridge,
     data: PathBuf,
     cache: PathBuf,
     preview: Mutex<preview::PreviewCache>,
+}
+#[derive(Clone, Serialize)]
+struct ChangeStatus {
+    phase: &'static str,
+    attempt: usize,
+    max_attempts: usize,
 }
 #[derive(Serialize)]
 struct Snapshot {
@@ -44,11 +51,17 @@ struct Snapshot {
     browser_open: bool,
     busy: bool,
     changing: bool,
+    change_status: Option<ChangeStatus>,
     error: Option<String>,
     preview: Option<String>,
     locale: String,
 }
 impl Engine {
+    fn set_change_status(&self, status: Option<ChangeStatus>) {
+        *self.change_status.lock().unwrap() = status;
+        let _ = self.app.emit_to("main", "pinpaper-changed", ());
+    }
+
     fn save(&self, lib: &Library) -> Result<(), String> {
         fs::create_dir_all(&self.data).map_err(|_| "Cannot create data directory")?;
         let temp = self.data.join("library.tmp");
@@ -97,13 +110,18 @@ impl Engine {
         impl Drop for Changing<'_> {
             fn drop(&mut self) {
                 self.0.changing.store(false, Ordering::SeqCst);
+                self.0.set_change_status(None);
                 let _ = self.0.app.emit_to("main", "pinpaper-changed", ());
             }
         }
         self.changing.store(true, Ordering::SeqCst);
         let _changing = Changing(self);
         let _ = self.app.emit_to("main", "pinpaper-changed", ());
-        let list: Vec<_> = model::ranked(&self.library.lock().unwrap())
+        let candidates = model::rotation_candidates(&self.library.lock().unwrap());
+        if candidates.is_empty() {
+            return Err("No matching pictures. Choose a collection in Pictures to use, add pictures, or relax your picture preferences.".into());
+        }
+        let list: Vec<_> = candidates
             .into_iter()
             .filter(|pin| {
                 wallpaper::cached(&self.cache, pin).exists()
@@ -114,12 +132,33 @@ impl Engine {
             })
             .collect();
         if list.is_empty() {
-            return Err("No matching pictures. Choose a collection in Pictures to use, add pictures, or relax your picture preferences.".into());
+            return Err("Wallpaper search paused because matching pictures are temporarily unavailable after previous download failures. Try again later or re-import Pinterest pictures.".into());
         }
         let settings = self.library.lock().unwrap().settings.clone();
-        let selected = wallpaper::select_one_download(
+        let selected = wallpaper::select_bounded(
             list,
             |pin| wallpaper::cached(&self.cache, pin).exists(),
+            |pin| (format!("{}:{}", pin.board_id, pin.id), pin.url.clone()),
+            wallpaper::MAX_FOREGROUND_ATTEMPTS,
+            wallpaper::FOREGROUND_SEARCH_BUDGET,
+            |attempt, _| {
+                self.set_change_status(Some(ChangeStatus {
+                    phase: if attempt == 1 {
+                        "searching"
+                    } else {
+                        "retrying"
+                    },
+                    attempt,
+                    max_attempts: wallpaper::MAX_FOREGROUND_ATTEMPTS,
+                }));
+            },
+            |attempt, _, _| {
+                self.set_change_status(Some(ChangeStatus {
+                    phase: "retrying",
+                    attempt,
+                    max_attempts: wallpaper::MAX_FOREGROUND_ATTEMPTS,
+                }));
+            },
             |pin| {
                 let mut pin = pin;
                 let existing = wallpaper::cached(&self.cache, &pin);
@@ -174,13 +213,18 @@ impl Engine {
         );
         let (mut pin, path, w, h) = match selected {
             Ok(candidate) => candidate,
-            Err(error) => {
+            Err(failure) => {
                 // Persist rejected dimensions, but do not write the full library
                 // twice on every successful wallpaper change.
                 self.save(&self.library.lock().unwrap())?;
-                return Err(error);
+                return Err(selection_error(failure));
             }
         };
+        self.set_change_status(Some(ChangeStatus {
+            phase: "applying",
+            attempt: 1,
+            max_attempts: wallpaper::MAX_FOREGROUND_ATTEMPTS,
+        }));
         // OS adapter failures are not image failures: stop instead of downloading the library.
         wallpaper::apply(&self.app, &path)?;
         self.preview.lock().unwrap().clear();
@@ -190,6 +234,7 @@ impl Engine {
         pin.height = h;
         lib.current = Some(pin.clone());
         lib.last_change = chrono::Utc::now().timestamp();
+        model::record_rotation(&mut lib, &pin);
         lib.history.push(pin.id);
         if lib.history.len() > 30 {
             lib.history.remove(0);
@@ -197,6 +242,55 @@ impl Engine {
         self.save(&lib)?;
         Ok(())
     }
+}
+
+fn selection_error(failure: wallpaper::SelectionFailure) -> String {
+    let attempts = failure.attempts;
+    let max_attempts = failure.max_attempts;
+    let candidates = failure.candidates;
+    let all_filters = !failure.errors.is_empty()
+        && failure.errors.iter().all(|error| {
+            error.contains("resolution")
+                || error.contains("orientation")
+                || error.contains("filters")
+        });
+    let all_network = !failure.errors.is_empty()
+        && failure.errors.iter().all(|error| {
+            error.contains("download")
+                || error.contains("HTTP")
+                || error.contains("Pinterest")
+                || error.contains("hosted")
+                || error.contains("timed out")
+                || error.contains("interrupted")
+        });
+    if failure.exhausted_budget {
+        if all_filters {
+            return format!(
+                "No suitable wallpapers match the resolution/orientation filters after checking {attempts} of {candidates} candidates (limit {max_attempts}). Wallpaper search paused at its foreground limit; relax the filters or try again."
+            );
+        }
+        if all_network {
+            return format!(
+                "Wallpaper search paused after checking {attempts} of {candidates} candidates (limit {max_attempts}) because downloads were unavailable. Try again later or re-import Pinterest pictures."
+            );
+        }
+        return format!(
+            "Wallpaper search paused after checking {attempts} of {candidates} candidates (limit {max_attempts}). Try again or relax the picture filters."
+        );
+    }
+    if all_filters {
+        return format!(
+            "No suitable wallpapers match the resolution/orientation filters after checking {attempts} of {candidates} candidates."
+        );
+    }
+    if all_network {
+        return format!(
+            "No suitable wallpapers could be downloaded after checking {attempts} of {candidates} candidates. Try again later or re-import Pinterest pictures."
+        );
+    }
+    format!(
+        "No suitable wallpapers found after checking {attempts} of {candidates} candidates. Try again or relax the picture filters."
+    )
 }
 fn exclusive<T>(e: &Engine, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     if e.busy.swap(true, Ordering::SeqCst) {
@@ -240,6 +334,7 @@ async fn snapshot(
             browser_open: app.get_webview_window(browser_session::LABEL).is_some(),
             busy: e.busy.load(Ordering::SeqCst),
             changing: e.changing.load(Ordering::SeqCst),
+            change_status: e.change_status.lock().unwrap().clone(),
             error: e.error.lock().unwrap().clone(),
             preview,
             locale: language::system_language().into(),
@@ -528,6 +623,7 @@ fn main() {
                 error: Mutex::new(error),
                 busy: AtomicBool::new(false),
                 changing: AtomicBool::new(false),
+                change_status: Mutex::new(None),
                 warm,
                 browser_connected: AtomicBool::new(false),
                 bridge: browser_session::ImportBridge::default(),
@@ -708,4 +804,42 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error running Pinpaper");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_search_errors_distinguish_network_filters_and_budget() {
+        let network = selection_error(wallpaper::SelectionFailure {
+            attempts: 2,
+            max_attempts: 8,
+            candidates: 4,
+            exhausted_budget: false,
+            errors: vec!["Image download returned HTTP 403".into()],
+        });
+        assert!(network.contains("could be downloaded"));
+
+        let filters = selection_error(wallpaper::SelectionFailure {
+            attempts: 2,
+            max_attempts: 8,
+            candidates: 2,
+            exhausted_budget: false,
+            errors: vec![
+                "Downloaded images do not meet your resolution/orientation filters".into(),
+            ],
+        });
+        assert!(filters.contains("match the resolution/orientation filters"));
+
+        let budget = selection_error(wallpaper::SelectionFailure {
+            attempts: 8,
+            max_attempts: 8,
+            candidates: 20,
+            exhausted_budget: true,
+            errors: vec!["Image download failed".into()],
+        });
+        assert!(budget.contains("Wallpaper search paused"));
+        assert!(budget.contains("limit 8"));
+    }
 }
