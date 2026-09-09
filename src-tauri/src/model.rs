@@ -63,6 +63,10 @@ pub struct Pin {
     pub title: String,
     pub description: String,
     pub url: String,
+    /// An image URL observed on Pinterest and kept as a fallback when the
+    /// preferred observed URL is no longer available from the CDN.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_url: Option<String>,
     pub width: u32,
     pub height: u32,
 }
@@ -158,6 +162,7 @@ mod tests {
             title: title.into(),
             description: String::new(),
             url: String::new(),
+            fallback_url: None,
             width: 1920,
             height: 1080,
         }
@@ -248,6 +253,7 @@ mod browser_ranking_tests {
             title: "Forest".into(),
             description: String::new(),
             url: String::new(),
+            fallback_url: None,
             width: 0,
             height: 0,
         });

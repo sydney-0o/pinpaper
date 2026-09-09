@@ -240,6 +240,8 @@ pub struct PagePin {
     title: String,
     description: String,
     url: String,
+    #[serde(default)]
+    fallback_url: Option<String>,
     width: u32,
     height: u32,
 }
@@ -336,27 +338,35 @@ fn normalize_report(report: PageReport) -> Result<Vec<Pin>, String> {
                 && p.height <= 16384
                 && seen.insert(p.id.clone())
         })
-        .map(|p| Pin {
-            dimensions_verified: false,
-            id: p.id,
-            board_id: SOURCE.into(),
-            title: if p.title.trim().is_empty() {
-                "Untitled pin".into()
-            } else {
-                p.title.chars().take(300).collect()
-            },
-            description: p.description.chars().take(2000).collect(),
-            url: p.url,
-            width: if p.width > 0 && p.height > 0 {
-                p.width
-            } else {
-                0
-            },
-            height: if p.width > 0 && p.height > 0 {
-                p.height
-            } else {
-                0
-            },
+        .map(|p| {
+            let fallback_url = p
+                .fallback_url
+                .as_deref()
+                .filter(|url| *url != p.url.as_str() && network::valid_image_url(url))
+                .map(str::to_owned);
+            Pin {
+                dimensions_verified: false,
+                id: p.id,
+                board_id: SOURCE.into(),
+                title: if p.title.trim().is_empty() {
+                    "Untitled pin".into()
+                } else {
+                    p.title.chars().take(300).collect()
+                },
+                description: p.description.chars().take(2000).collect(),
+                url: p.url,
+                fallback_url,
+                width: if p.width > 0 && p.height > 0 {
+                    p.width
+                } else {
+                    0
+                },
+                height: if p.width > 0 && p.height > 0 {
+                    p.height
+                } else {
+                    0
+                },
+            }
         })
         .collect();
     if pins.is_empty() {
@@ -500,6 +510,7 @@ mod bridge_tests {
                 title: "".into(),
                 description: "".into(),
                 url: "https://i.pinimg.com/a.jpg".into(),
+                fallback_url: None,
                 width: 0,
                 height: 0,
             }],

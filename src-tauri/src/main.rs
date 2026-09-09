@@ -67,6 +67,31 @@ impl Engine {
         }
         fs::rename(temp, target).map_err(|_| "Cannot save library".into())
     }
+    fn repair_pin_source(
+        &self,
+        pin: &model::Pin,
+        source: &network::ObservedPinImage,
+    ) -> Result<model::Pin, String> {
+        let mut updated_pin = pin.clone();
+        updated_pin.url = source.primary.clone();
+        updated_pin.fallback_url = source.fallback.clone();
+        // Page metadata is not a decoded image. Re-verify dimensions after the
+        // observed URL has actually been downloaded.
+        updated_pin.dimensions_verified = false;
+        updated_pin.width = 0;
+        updated_pin.height = 0;
+        let mut library = self.library.lock().unwrap();
+        if let Some(stored) = library
+            .pins
+            .iter_mut()
+            .find(|stored| stored.id == pin.id && stored.board_id == pin.board_id)
+        {
+            *stored = updated_pin.clone();
+            self.save(&library)?;
+        }
+        Ok(updated_pin)
+    }
+
     fn next(&self) -> Result<(), String> {
         struct Changing<'a>(&'a Engine);
         impl Drop for Changing<'_> {
@@ -83,6 +108,9 @@ impl Engine {
             .filter(|pin| {
                 wallpaper::cached(&self.cache, pin).exists()
                     || !wallpaper::temporarily_unavailable(pin)
+                    // A legacy /originals/ URL needs the bounded page repair
+                    // below; a prefetch refusal must not hide it from Next.
+                    || (pin.fallback_url.is_none() && network::is_original_url(&pin.url))
             })
             .collect();
         if list.is_empty() {
@@ -93,6 +121,20 @@ impl Engine {
             list,
             |pin| wallpaper::cached(&self.cache, pin).exists(),
             |pin| {
+                let mut pin = pin;
+                let existing = wallpaper::cached(&self.cache, &pin);
+                if !existing.exists()
+                    && pin.fallback_url.is_none()
+                    && network::is_original_url(&pin.url)
+                {
+                    // Old imports stored a guessed /originals/ URL. Resolve
+                    // exactly one current pin page before attempting that URL.
+                    // A failed page lookup falls through to the normal bounded
+                    // download path and is subject to its five-minute cooldown.
+                    if let Ok(source) = network::resolve_pin_image(&pin.id) {
+                        pin = self.repair_pin_source(&pin, &source)?;
+                    }
+                }
                 let existing = wallpaper::cached(&self.cache, &pin);
                 let path = if existing.exists() {
                     existing

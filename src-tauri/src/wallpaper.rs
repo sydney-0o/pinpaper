@@ -109,12 +109,31 @@ pub fn download(dir: &Path, pin: &Pin) -> Result<PathBuf, String> {
                 "Image download failed"
             }
         })?;
-        // Fall back only when the original is absent, never because of a timeout.
-        if original != pin.url && matches!(response.status().as_u16(), 403 | 404 | 410) {
-            response = client
-                .get(&pin.url)
-                .send()
-                .map_err(|_| "Image fallback download failed")?;
+        // Fall back only when the preferred URL is absent, never because of a
+        // timeout. Every fallback was either imported from the page or is the
+        // exact source URL supplied by the page; no URL variants are invented.
+        if matches!(response.status().as_u16(), 403 | 404 | 410) {
+            let mut fallbacks = Vec::new();
+            for candidate in [Some(pin.url.as_str()), pin.fallback_url.as_deref()] {
+                if let Some(candidate) =
+                    candidate.filter(|url| *url != original && network::valid_image_url(url))
+                {
+                    if !fallbacks.iter().any(|seen| seen == &candidate) {
+                        fallbacks.push(candidate);
+                    }
+                }
+            }
+            for candidate in fallbacks {
+                response = client
+                    .get(candidate)
+                    .send()
+                    .map_err(|_| "Image fallback download failed")?;
+                if response.status().is_success()
+                    || !matches!(response.status().as_u16(), 403 | 404 | 410)
+                {
+                    break;
+                }
+            }
         }
         if !response.status().is_success() {
             return Err(format!(

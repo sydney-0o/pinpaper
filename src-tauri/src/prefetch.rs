@@ -1,7 +1,7 @@
 //! A single, event-driven worker warms at most two current candidates.
 //! It never applies wallpaper or mutates selection/history. Foreground requests
 //! always rank fresh; a superseded download may finish only as an unused cache file.
-use crate::{model, wallpaper, Engine};
+use crate::{model, network, wallpaper, Engine};
 use std::{
     collections::HashMap,
     sync::{mpsc::Receiver, Arc},
@@ -26,7 +26,11 @@ pub fn start(engine: &Arc<Engine>, receiver: Receiver<()>) {
                     .into_iter()
                     .take(2)
                     .find(|p| {
-                        !attempted.contains(&p.url) && !wallpaper::temporarily_unavailable(p)
+                        !attempted.contains(&p.url)
+                            && !wallpaper::temporarily_unavailable(p)
+                            // Legacy imports need a foreground page repair so
+                            // the worker never starts a blind /originals/ crawl.
+                            && !(p.fallback_url.is_none() && network::is_original_url(&p.url))
                     });
                 let Some(pin) = candidate else { break };
                 attempted.push(pin.url.clone());
