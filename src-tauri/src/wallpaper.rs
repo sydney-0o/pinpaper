@@ -147,6 +147,17 @@ pub fn temporarily_unavailable(pin: &Pin) -> bool {
     failures.retain(|_, since| since.elapsed() < std::time::Duration::from_secs(300));
     failures.contains_key(&pin.url)
 }
+
+/// A deliberate foreground retry may immediately revisit matching URLs that a
+/// background warm-up marked as unavailable. Keep the reset scoped to the
+/// current candidate set so unrelated libraries are not affected.
+pub fn clear_temporary_unavailable<'a>(pins: impl IntoIterator<Item = &'a Pin>) {
+    let mut failures = failures().lock().unwrap();
+    for pin in pins {
+        failures.remove(&pin.url);
+    }
+}
+
 pub fn download(dir: &Path, pin: &Pin) -> Result<PathBuf, String> {
     if !network::valid_image_url(&pin.url) {
         return Err("Image is not hosted on Pinterest's image CDN".into());
@@ -550,5 +561,36 @@ mod download_tests {
         })
         .unwrap();
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn foreground_retry_clears_only_matching_failure_cooldowns() {
+        let matching = Pin {
+            dimensions_verified: false,
+            id: "matching".into(),
+            board_id: "board".into(),
+            title: String::new(),
+            description: String::new(),
+            url: "https://i.pinimg.com/236x/matching.jpg".into(),
+            fallback_url: None,
+            width: 0,
+            height: 0,
+        };
+        let unrelated = Pin {
+            id: "unrelated".into(),
+            url: "https://i.pinimg.com/236x/unrelated.jpg".into(),
+            ..matching.clone()
+        };
+        {
+            let mut failed = failures().lock().unwrap();
+            failed.insert(matching.url.clone(), Instant::now());
+            failed.insert(unrelated.url.clone(), Instant::now());
+        }
+        assert!(temporarily_unavailable(&matching));
+        assert!(temporarily_unavailable(&unrelated));
+        clear_temporary_unavailable(std::iter::once(&matching));
+        assert!(!temporarily_unavailable(&matching));
+        assert!(temporarily_unavailable(&unrelated));
+        failures().lock().unwrap().clear();
     }
 }

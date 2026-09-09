@@ -490,6 +490,9 @@ code {
   background: #ecded5;
   color: #955b47;
 }
+.error-retry {
+  margin-top: 4px;
+}
 .success {
   background: #dde7d5;
   color: #597343;

@@ -105,7 +105,7 @@ impl Engine {
         Ok(updated_pin)
     }
 
-    fn next(&self) -> Result<(), String> {
+    fn next(&self, manual_retry: bool) -> Result<(), String> {
         struct Changing<'a>(&'a Engine);
         impl Drop for Changing<'_> {
             fn drop(&mut self) {
@@ -121,6 +121,11 @@ impl Engine {
         if candidates.is_empty() {
             return Err("No matching pictures. Choose a collection in Pictures to use, add pictures, or relax your picture preferences.".into());
         }
+        if manual_retry {
+            // A deliberate click is an explicit request to retry matching
+            // images now. Scheduled changes retain the five-minute cooldown.
+            wallpaper::clear_temporary_unavailable(candidates.iter());
+        }
         let list: Vec<_> = candidates
             .into_iter()
             .filter(|pin| {
@@ -132,7 +137,7 @@ impl Engine {
             })
             .collect();
         if list.is_empty() {
-            return Err("Wallpaper search paused because matching pictures are temporarily unavailable after previous download failures. Try again later or re-import Pinterest pictures.".into());
+            return Err("Wallpaper search paused because matching pictures are temporarily unavailable after previous download failures. Retry the wallpaper search now; if the links keep failing, re-import the Pinterest pictures.".into());
         }
         let settings = self.library.lock().unwrap().settings.clone();
         let selected = wallpaper::select_bounded(
@@ -271,7 +276,7 @@ fn selection_error(failure: wallpaper::SelectionFailure) -> String {
         }
         if all_network {
             return format!(
-                "Wallpaper search paused after checking {attempts} of {candidates} candidates (limit {max_attempts}) because downloads were unavailable. Try again later or re-import Pinterest pictures."
+                "Wallpaper search paused after checking {attempts} of {candidates} candidates (limit {max_attempts}) because downloads were unavailable. Retry now; if downloads keep failing, re-import the Pinterest pictures."
             );
         }
         return format!(
@@ -285,11 +290,11 @@ fn selection_error(failure: wallpaper::SelectionFailure) -> String {
     }
     if all_network {
         return format!(
-            "No suitable wallpapers could be downloaded after checking {attempts} of {candidates} candidates. Try again later or re-import Pinterest pictures."
+            "No suitable wallpapers could be downloaded after checking {attempts} of {candidates} candidates. Retry now; if downloads keep failing, re-import the Pinterest pictures."
         );
     }
     format!(
-        "No suitable wallpapers found after checking {attempts} of {candidates} candidates. Try again or relax the picture filters."
+        "No suitable wallpapers found after checking {attempts} of {candidates} candidates. Retry now or relax the picture filters."
     )
 }
 fn exclusive<T>(e: &Engine, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
@@ -363,7 +368,7 @@ async fn save_settings(e: tauri::State<'_, Arc<Engine>>, settings: Settings) -> 
 #[tauri::command]
 async fn next_wallpaper(e: tauri::State<'_, Arc<Engine>>) -> Result<(), String> {
     let e = e.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || exclusive(&e, || e.next()))
+    tauri::async_runtime::spawn_blocking(move || exclusive(&e, || e.next(true)))
         .await
         .map_err(|_| "Wallpaper worker failed")?
 }
@@ -387,7 +392,7 @@ async fn feedback(e: tauri::State<'_, Arc<Engine>>, value: i8) -> Result<(), Str
                 e.save(&lib)?;
             }
             if value == -1 {
-                e.next()?;
+                e.next(true)?;
             }
             Ok(())
         })
@@ -723,7 +728,7 @@ fn main() {
                         }
                         "next" => {
                             std::thread::spawn(move || {
-                                let _ = exclusive(&e, || e.next());
+                                let _ = exclusive(&e, || e.next(true));
                             });
                         }
                         "pause" => {
@@ -752,7 +757,7 @@ fn main() {
                             && now - lib.last_change >= lib.settings.interval_minutes as i64 * 60
                     };
                     if due && now >= retry_after && !engine.busy.load(Ordering::SeqCst) {
-                        if exclusive(&engine, || engine.next()).is_err() {
+                        if exclusive(&engine, || engine.next(false)).is_err() {
                             retry_after = now + 300;
                         } else {
                             retry_after = 0;

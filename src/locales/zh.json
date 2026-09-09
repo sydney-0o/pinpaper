@@ -98,6 +98,7 @@
   "working": "请稍候…",
   "adding": "正在添加图片…",
   "changing": "正在设置壁纸…",
+  "retryNow": "立即再试一张壁纸",
   "searchingFirst": "正在寻找壁纸…第 {attempt}/{max} 次尝试。",
   "searchingNext": "这张图片无法使用。正在寻找下一张壁纸…第 {attempt}/{max} 次尝试。",
   "searchingApply": "已找到壁纸，正在应用…",
@@ -114,5 +115,5 @@
   "verifyTitle": "Pinterest — 验证",
   "minWidthHelp": "并非所有 Pinterest 图片的分辨率都足够适合你的屏幕。降低最小宽度可以使用更多图片，但清晰度可能会下降。",
   "errorForbidden": "Pinterest 拒绝下载这张图片。再次点击更换壁纸以尝试另一张。如果问题持续，请重新导入 Pinterest 中已加载的图片以更新链接。",
-  "retrySearch": "这张图片无法使用。Pinpaper 已寻找其他壁纸，并在达到尝试上限后暂停。请稍后重试，或重新导入 Pinterest 图片。"
+  "retrySearch": "Pinpaper 已尝试寻找其他壁纸，但都无法使用。可能是分辨率或方向筛选条件过严、Pinterest 图片暂时不可用、下载或网络请求失败，或者导入的原图链接已失效。请立即重试；如果问题持续，请放宽图片筛选条件，或重新导入 Pinterest 中已加载的图片。"
 }

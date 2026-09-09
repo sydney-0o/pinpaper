@@ -98,6 +98,7 @@
   "working": "Please wait…",
   "adding": "Adding pictures…",
   "changing": "Setting your wallpaper…",
+  "retryNow": "Try another wallpaper now",
   "searchingFirst": "Looking for a wallpaper… attempt {attempt} of {max}.",
   "searchingNext": "This picture did not work. Looking for the next wallpaper… attempt {attempt} of {max}.",
   "searchingApply": "Wallpaper found. Applying it…",
@@ -114,5 +115,5 @@
   "verifyTitle": "Pinterest — verification",
   "minWidthHelp": "Not every Pinterest picture is large enough for your screen. Lowering the minimum width makes more pictures available, but they may look less sharp.",
   "errorForbidden": "Pinterest refused this image download. Choose Change wallpaper again to try another picture. If this repeats, import the loaded Pinterest pictures again to refresh their links.",
-  "retrySearch": "That picture could not be used. Pinpaper searched the next wallpapers and paused after its retry limit. Try again later or re-import the Pinterest pictures."
+  "retrySearch": "Pinpaper tried the next wallpapers, but none could be used. This can happen when the resolution or orientation filters are too strict, a Pinterest image is temporarily unavailable, a download or network request fails, or an imported original link has expired. Try again now; if it keeps happening, relax the picture filters or re-import the pictures loaded in Pinterest."
 }

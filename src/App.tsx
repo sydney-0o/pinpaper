@@ -265,6 +265,9 @@ export default function App() {
     setDraft((d) => ({ ...d, [key]: value }));
   }
   const problem = error || state.error;
+  const canRetrySearch =
+    problem?.includes("Wallpaper search paused") ||
+    problem?.includes("No suitable wallpapers");
   const errorHint =
     problem?.includes("403") ? t("errorForbidden") : problem === "preview"
       ? t("previewOnly")
@@ -314,6 +317,16 @@ export default function App() {
         <div role="alert" className="message error">
           <strong>{t("errorTitle")}</strong>
           <p>{errorHint}</p>
+          {canRetrySearch && hasSelection && (
+            <button
+              className="secondary error-retry"
+              disabled={blocked}
+              onClick={() => action("next_wallpaper")}
+            >
+              <SkipForward size={16} />
+              {t("retryNow")}
+            </button>
+          )}
           {problem !== "preview" && (
             <details>
               <summary>{t("details")}</summary>
