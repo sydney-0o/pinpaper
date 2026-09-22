@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod autostart;
 mod browser_session;
 mod language;
 mod model;
@@ -13,7 +14,7 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -29,12 +30,14 @@ struct Engine {
     error: Mutex<Option<String>>,
     busy: AtomicBool,
     changing: AtomicBool,
+    cancel_change: AtomicBool,
     change_status: Mutex<Option<ChangeStatus>>,
     warm: std::sync::mpsc::SyncSender<()>,
     browser_connected: AtomicBool,
     bridge: browser_session::ImportBridge,
     data: PathBuf,
     cache: PathBuf,
+    cache_generation: AtomicU64,
     preview: Mutex<preview::PreviewCache>,
 }
 #[derive(Clone, Serialize)]
@@ -46,6 +49,11 @@ struct ChangeStatus {
 #[derive(Serialize)]
 struct Snapshot {
     library: Library,
+    total_pictures: usize,
+    selected_pictures: usize,
+    available_pictures: usize,
+    unknown_resolution_pictures: usize,
+    hidden_pictures: usize,
     connected: bool,
     browser_connected: bool,
     browser_open: bool,
@@ -80,20 +88,65 @@ impl Engine {
         }
         fs::rename(temp, target).map_err(|_| "Cannot save library".into())
     }
-    fn repair_pin_source(
-        &self,
-        pin: &model::Pin,
-        source: &network::ObservedPinImage,
-    ) -> Result<model::Pin, String> {
+    fn prepare_pin(&self, pin: &model::Pin) -> Result<model::Pin, String> {
+        if !network::needs_pin_resolution(pin) { return Ok(pin.clone()); }
+        let generation = self.cache_generation.load(Ordering::SeqCst);
+        let source = match network::resolve_pin_image(&pin.id) {
+            Ok(source) if network::same_asset(&pin.url, &source.primary) => source,
+            // A missing/private/deleted page must not replace the pin with
+            // a related recommendation. Retain the observed image as fallback.
+            _ => return Ok(pin.clone()),
+        };
         let mut updated_pin = pin.clone();
+        let source_identity = if let Some(asset) = network::asset_identity(&source.primary) {
+            format!("url:{asset}")
+        } else {
+            format!("pin:{}:{}", pin.board_id, pin.id)
+        };
+        let same_asset = model::image_identity(pin) == source_identity;
+        // A generic social preview may be smaller than the feed variant.
+        // Only promote it when the page supplied an original or a larger size.
+        let cdn_width = |url: &str| url::Url::parse(url).ok().and_then(|url| {
+            url.path_segments()?.next()?.split_once('x')?.0.parse::<u32>().ok()
+        }).unwrap_or(0);
+        if !source.primary_is_original && cdn_width(&source.primary) < cdn_width(&pin.url) {
+            return Ok(pin.clone());
+        }
         updated_pin.url = source.primary.clone();
+        if source.source_url.is_some() {
+            updated_pin.source_url = source.source_url.clone();
+        }
         updated_pin.fallback_url = source.fallback.clone();
+        updated_pin.original_url_exact = source.primary_is_original;
         // Page metadata is not a decoded image. Re-verify dimensions after the
         // observed URL has actually been downloaded.
         updated_pin.dimensions_verified = false;
         updated_pin.width = 0;
         updated_pin.height = 0;
+        updated_pin.dimensions_source = model::DimensionSource::Unknown;
+        updated_pin.dimensions_url = None;
+        if !same_asset {
+            updated_pin.max_width = 0;
+            updated_pin.max_height = 0;
+            updated_pin.max_dimensions_source = model::DimensionSource::Unknown;
+            updated_pin.max_dimensions_url = None;
+            updated_pin.thumbnail_width = 0;
+            updated_pin.thumbnail_height = 0;
+        }
+        if source.max_width > 0 && source.max_height > 0 {
+            updated_pin.max_width = source.max_width;
+            updated_pin.max_height = source.max_height;
+            updated_pin.max_dimensions_source = model::DimensionSource::PinterestOriginal;
+            updated_pin.max_dimensions_url = source.max_dimensions_url.clone();
+        }
+        if source.thumbnail_width > 0 && source.thumbnail_height > 0 {
+            updated_pin.thumbnail_width = source.thumbnail_width;
+            updated_pin.thumbnail_height = source.thumbnail_height;
+        }
         let mut library = self.library.lock().unwrap();
+        if self.cache_generation.load(Ordering::SeqCst) != generation {
+            return Err("Image download cancelled by local-data reset".into());
+        }
         if let Some(stored) = library
             .pins
             .iter_mut()
@@ -114,38 +167,55 @@ impl Engine {
                 let _ = self.0.app.emit_to("main", "pinpaper-changed", ());
             }
         }
+        // A stop request belongs to one foreground change. Clear the previous
+        // request only when a new change actually starts.
+        self.cancel_change.store(false, Ordering::SeqCst);
         self.changing.store(true, Ordering::SeqCst);
         let _changing = Changing(self);
         let _ = self.app.emit_to("main", "pinpaper-changed", ());
-        let candidates = model::rotation_candidates(&self.library.lock().unwrap());
+        let candidates = {
+            let mut lib = self.library.lock().unwrap();
+            let dimensions_changed = model::canonicalize_dimensions(&mut lib)
+                | refresh_cached_dimensions(&self.cache, &mut lib);
+            if dimensions_changed {
+                self.save(&lib)?;
+            }
+            // A new round is allowed only after every currently eligible pin
+            // has been inspected. Failed candidates remain separate from
+            // successful history, so a few cached successes cannot become an
+            // endless fallback while the rest of the collection is pending.
+            model::begin_rotation_round(&mut lib);
+            model::foreground_rotation_candidates(&lib)
+        };
         if candidates.is_empty() {
             return Err("No matching pictures. Choose a collection in Pictures to use, add pictures, or relax your picture preferences.".into());
+        }
+        if self.cancel_change.load(Ordering::SeqCst) {
+            return Err(wallpaper::CHANGE_CANCELLED.into());
         }
         if manual_retry {
             // A deliberate click is an explicit request to retry matching
             // images now. Scheduled changes retain the five-minute cooldown.
             wallpaper::clear_temporary_unavailable(candidates.iter());
         }
-        let list: Vec<_> = candidates
-            .into_iter()
-            .filter(|pin| {
-                wallpaper::cached(&self.cache, pin).exists()
-                    || !wallpaper::temporarily_unavailable(pin)
-                    // A legacy /originals/ URL needs the bounded page repair
-                    // below; a prefetch refusal must not hide it from Next.
-                    || (pin.fallback_url.is_none() && network::is_original_url(&pin.url))
-            })
-            .collect();
+        let list = wallpaper::foreground_candidates(candidates, &self.cache, manual_retry);
         if list.is_empty() {
             return Err("Wallpaper search paused because matching pictures are temporarily unavailable after previous download failures. Retry the wallpaper search now; if the links keep failing, re-import the Pinterest pictures.".into());
         }
+        // The success target is one applied wallpaper for this command. The
+        // retry/progress limit is the finite set of selected saved pictures;
+        // failures and duplicates do not reduce the success target, and the
+        // selector walks the remaining set without the old fixed limit of
+        // eight attempts.
+        let candidate_limit = list.len();
+        let target_successes = wallpaper::FOREGROUND_TARGET_SUCCESSES;
         let settings = self.library.lock().unwrap().settings.clone();
-        let selected = wallpaper::select_bounded(
+        let mut rejected_attempts = Vec::new();
+        let selected = wallpaper::select_foreground_with_target(
             list,
+            target_successes,
             |pin| wallpaper::cached(&self.cache, pin).exists(),
-            |pin| (format!("{}:{}", pin.board_id, pin.id), pin.url.clone()),
-            wallpaper::MAX_FOREGROUND_ATTEMPTS,
-            wallpaper::FOREGROUND_SEARCH_BUDGET,
+            |pin| (model::image_identity(pin), pin.url.clone()),
             |attempt, _| {
                 self.set_change_status(Some(ChangeStatus {
                     phase: if attempt == 1 {
@@ -154,38 +224,65 @@ impl Engine {
                         "retrying"
                     },
                     attempt,
-                    max_attempts: wallpaper::MAX_FOREGROUND_ATTEMPTS,
+                    max_attempts: candidate_limit,
                 }));
             },
-            |attempt, _, _| {
+            |attempt, pin, error| {
+                // A downloaded image that fails the current filters is marked
+                // verified and disappears from the current eligible set. Do
+                // not persist that failed key, so relaxing the filters can
+                // make it available again without resetting the whole round.
+                if !error.contains("resolution/orientation filters") {
+                    rejected_attempts.push(pin.clone());
+                }
                 self.set_change_status(Some(ChangeStatus {
                     phase: "retrying",
                     attempt,
-                    max_attempts: wallpaper::MAX_FOREGROUND_ATTEMPTS,
+                    max_attempts: candidate_limit,
                 }));
             },
             |pin| {
-                let mut pin = pin;
-                let existing = wallpaper::cached(&self.cache, &pin);
-                if !existing.exists()
-                    && pin.fallback_url.is_none()
-                    && network::is_original_url(&pin.url)
-                {
-                    // Old imports stored a guessed /originals/ URL. Resolve
-                    // exactly one current pin page before attempting that URL.
-                    // A failed page lookup falls through to the normal bounded
-                    // download path and is subject to its five-minute cooldown.
-                    if let Ok(source) = network::resolve_pin_image(&pin.id) {
-                        pin = self.repair_pin_source(&pin, &source)?;
-                    }
+                if self.cancel_change.load(Ordering::SeqCst) {
+                    return Err(wallpaper::CHANGE_CANCELLED.into());
+                }
+                let mut pin = self.prepare_pin(&pin)?;
+                if self.cancel_change.load(Ordering::SeqCst) {
+                    return Err(wallpaper::CHANGE_CANCELLED.into());
                 }
                 let existing = wallpaper::cached(&self.cache, &pin);
-                let path = if existing.exists() {
-                    existing
+                let (path, dimensions_url) = if existing.exists() {
+                    (
+                        existing,
+                        pin.dimensions_url
+                            .clone()
+                            .unwrap_or_else(|| pin.url.clone()),
+                    )
                 } else {
-                    wallpaper::download(&self.cache, &pin)?
+                    let expected_generation = self.cache_generation.load(Ordering::SeqCst);
+                    let downloaded = wallpaper::download_with_guard(&self.cache, &pin, || {
+                        self.cache_generation.load(Ordering::SeqCst) == expected_generation
+                            && !self.cancel_change.load(Ordering::SeqCst)
+                    })?;
+                    if self.cancel_change.load(Ordering::SeqCst) {
+                        return Err(wallpaper::CHANGE_CANCELLED.into());
+                    }
+                    let source_url = if downloaded.source_url.is_empty() {
+                        self.library
+                            .lock()
+                            .unwrap()
+                            .pins
+                            .iter()
+                            .find(|stored| stored.id == pin.id && stored.board_id == pin.board_id)
+                            .and_then(|stored| stored.dimensions_url.clone())
+                            .filter(|url| !url.is_empty())
+                            .unwrap_or_else(|| pin.url.clone())
+                    } else {
+                        downloaded.source_url
+                    };
+                    (downloaded.path, source_url)
                 };
-                let (w, h) = match image::image_dimensions(&path) {
+                pin.dimensions_url = Some(dimensions_url.clone());
+                let (w, h) = match wallpaper::decoded_dimensions(&path) {
                     Ok(size) => size,
                     Err(_) => {
                         // Only remove this corrupt file, so a future attempt can fetch it again.
@@ -193,6 +290,9 @@ impl Engine {
                         return Err("Cached image could not be decoded".into());
                     }
                 };
+                if self.cancel_change.load(Ordering::SeqCst) {
+                    return Err(wallpaper::CHANGE_CANCELLED.into());
+                }
                 {
                     let mut lib = self.library.lock().unwrap();
                     for candidate in lib
@@ -203,6 +303,8 @@ impl Engine {
                         candidate.dimensions_verified = true;
                         candidate.width = w;
                         candidate.height = h;
+                        candidate.dimensions_source = model::DimensionSource::Decoded;
+                        candidate.dimensions_url = Some(dimensions_url.clone());
                     }
                 }
                 if w < settings.min_width
@@ -217,26 +319,44 @@ impl Engine {
             },
         );
         let (mut pin, path, w, h) = match selected {
-            Ok(candidate) => candidate,
+            Ok(mut candidates) => candidates
+                .pop()
+                .expect("foreground success target must produce one candidate"),
             Err(failure) => {
-                // Persist rejected dimensions, but do not write the full library
-                // twice on every successful wallpaper change.
-                self.save(&self.library.lock().unwrap())?;
+                if failure.cancelled || self.cancel_change.load(Ordering::SeqCst) {
+                    return Err(wallpaper::CHANGE_CANCELLED.into());
+                }
+                // Persist rejected dimensions and the attempted rotation
+                // cursor. This is what moves the next click past transiently
+                // unavailable candidates instead of restarting at the same
+                // first few URLs.
+                let mut lib = self.library.lock().unwrap();
+                for attempted in &rejected_attempts {
+                    model::record_rotation_attempt(&mut lib, attempted);
+                }
+                self.save(&lib)?;
                 return Err(selection_error(failure));
             }
         };
         self.set_change_status(Some(ChangeStatus {
             phase: "applying",
             attempt: 1,
-            max_attempts: wallpaper::MAX_FOREGROUND_ATTEMPTS,
+            max_attempts: candidate_limit,
         }));
+        if self.cancel_change.load(Ordering::SeqCst) {
+            return Err(wallpaper::CHANGE_CANCELLED.into());
+        }
         // OS adapter failures are not image failures: stop instead of downloading the library.
-        wallpaper::apply(&self.app, &path)?;
+        wallpaper::apply(&self.app, &path, &settings.display_mode)?;
         self.preview.lock().unwrap().clear();
         let mut lib = self.library.lock().unwrap();
+        for attempted in &rejected_attempts {
+            model::record_rotation_attempt(&mut lib, attempted);
+        }
         pin.dimensions_verified = true;
         pin.width = w;
         pin.height = h;
+        pin.dimensions_source = model::DimensionSource::Decoded;
         lib.current = Some(pin.clone());
         lib.last_change = chrono::Utc::now().timestamp();
         model::record_rotation(&mut lib, &pin);
@@ -249,10 +369,79 @@ impl Engine {
     }
 }
 
+fn refresh_cached_dimensions(cache: &std::path::Path, library: &mut Library) -> bool {
+    let mut changed = false;
+    for pin in &mut library.pins {
+        // A verified decoded pair is already tied to the immutable cache key
+        // and needs no header read on every UI snapshot or wallpaper change.
+        // Only migrate records whose dimensions are still unknown or whose
+        // provenance has not been marked as decoded.
+        if pin.dimensions_verified
+            && pin.width > 0
+            && pin.height > 0
+            && pin.dimensions_source == model::DimensionSource::Decoded
+        {
+            continue;
+        }
+        if let Some((width, height)) = wallpaper::cached_dimensions(cache, pin) {
+            if !pin.dimensions_verified
+                || pin.width != width
+                || pin.height != height
+                || pin.dimensions_source != model::DimensionSource::Decoded
+            {
+                pin.dimensions_verified = true;
+                pin.width = width;
+                pin.height = height;
+                pin.dimensions_source = model::DimensionSource::Decoded;
+                if pin.dimensions_url.is_none() {
+                    pin.dimensions_url = Some(pin.url.clone());
+                }
+                changed = true;
+            }
+        }
+    }
+    if let Some(current) = library.current.as_mut() {
+        // The current wallpaper is shown immediately in the UI. Re-read its
+        // lightweight image header when a cache file exists so a stale
+        // persisted pair cannot survive a replacement of that one file.
+        if let Some((width, height)) = wallpaper::cached_dimensions(cache, current) {
+            if !current.dimensions_verified
+                || current.width != width
+                || current.height != height
+                || current.dimensions_source != model::DimensionSource::Decoded
+            {
+                current.dimensions_verified = true;
+                current.width = width;
+                current.height = height;
+                current.dimensions_source = model::DimensionSource::Decoded;
+                if current.dimensions_url.is_none() {
+                    current.dimensions_url = Some(current.url.clone());
+                }
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
 fn selection_error(failure: wallpaper::SelectionFailure) -> String {
+    if failure.cancelled {
+        return wallpaper::CHANGE_CANCELLED.into();
+    }
     let attempts = failure.attempts;
     let max_attempts = failure.max_attempts;
     let candidates = failure.candidates;
+    let success_summary = if failure.source_exhausted {
+        format!(
+            "{} of {} target images successfully prepared; saved-picture source exhausted",
+            failure.successful, failure.target_successes
+        )
+    } else {
+        format!(
+            "{} of {} target images successfully prepared",
+            failure.successful, failure.target_successes
+        )
+    };
     let all_filters = !failure.errors.is_empty()
         && failure.errors.iter().all(|error| {
             error.contains("resolution")
@@ -271,30 +460,30 @@ fn selection_error(failure: wallpaper::SelectionFailure) -> String {
     if failure.exhausted_budget {
         if all_filters {
             return format!(
-                "No suitable wallpapers match the resolution/orientation filters after checking {attempts} of {candidates} candidates (limit {max_attempts}). Wallpaper search paused at its foreground limit; relax the filters or try again."
+                "No suitable wallpapers match the resolution/orientation filters after checking {attempts} of {candidates} candidates (limit {max_attempts}; {success_summary}). Wallpaper search paused at its foreground limit; relax the filters or try again."
             );
         }
         if all_network {
             return format!(
-                "Wallpaper search paused after checking {attempts} of {candidates} candidates (limit {max_attempts}) because downloads were unavailable. Retry now; if downloads keep failing, re-import the Pinterest pictures."
+                "Wallpaper search paused after checking {attempts} of {candidates} candidates (limit {max_attempts}; {success_summary}) because downloads were unavailable. Retry now; if downloads keep failing, re-import the Pinterest pictures."
             );
         }
         return format!(
-            "Wallpaper search paused after checking {attempts} of {candidates} candidates (limit {max_attempts}). Try again or relax the picture filters."
+            "Wallpaper search paused after checking {attempts} of {candidates} candidates (limit {max_attempts}; {success_summary}). Try again or relax the picture filters."
         );
     }
     if all_filters {
         return format!(
-            "No suitable wallpapers match the resolution/orientation filters after checking {attempts} of {candidates} candidates."
+            "No suitable wallpapers match the resolution/orientation filters after checking {attempts} of {candidates} candidates ({success_summary})."
         );
     }
     if all_network {
         return format!(
-            "No suitable wallpapers could be downloaded after checking {attempts} of {candidates} candidates. Retry now; if downloads keep failing, re-import the Pinterest pictures."
+            "No suitable wallpapers could be downloaded after checking {attempts} of {candidates} candidates ({success_summary}). Retry now; if downloads keep failing, re-import the Pinterest pictures."
         );
     }
     format!(
-        "No suitable wallpapers found after checking {attempts} of {candidates} candidates. Retry now or relax the picture filters."
+        "No suitable wallpapers found after checking {attempts} of {candidates} candidates ({success_summary}). Retry now or relax the picture filters."
     )
 }
 fn exclusive<T>(e: &Engine, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
@@ -324,7 +513,16 @@ async fn snapshot(
 ) -> Result<Snapshot, String> {
     let e = e.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let library = e.library.lock().unwrap().clone();
+        let mut stored = e.library.lock().unwrap();
+        let dimensions_changed = model::canonicalize_dimensions(&mut stored)
+            | refresh_cached_dimensions(&e.cache, &mut stored);
+        if dimensions_changed {
+            if let Err(error) = e.save(&stored) {
+                *e.error.lock().unwrap() = Some(error);
+            }
+        }
+        let library = stored.clone();
+        drop(stored);
         let preview = library.current.as_ref().and_then(|pin| {
             e.preview
                 .lock()
@@ -332,8 +530,39 @@ async fn snapshot(
                 .get_or_load(&wallpaper::cached(&e.cache, pin), preview::load)
         });
         let has_pictures = !library.pins.is_empty();
+        let total_pictures = library.pins.len();
+        let hidden_pictures = library
+            .pins
+            .iter()
+            .filter(|pin| library.feedback.get(&pin.id) == Some(&-1))
+            .count();
+        let selected_pictures = library
+            .pins
+            .iter()
+            .filter(|pin| {
+                library.settings.board_ids.contains(&pin.board_id)
+                    && library.feedback.get(&pin.id) != Some(&-1)
+            })
+            .count();
+        let (available_pictures, unknown_resolution_pictures) = {
+            // The current wallpaper is temporarily skipped by rotation, but
+            // it still belongs in the user's filter count.
+            let mut count_library = library.clone();
+            count_library.current = None;
+            let available = model::ranked(&count_library);
+            let unknown = available
+                .iter()
+                .filter(|pin| !model::has_known_dimensions(pin))
+                .count();
+            (available.len(), unknown)
+        };
         Snapshot {
             library,
+            total_pictures,
+            selected_pictures,
+            available_pictures,
+            unknown_resolution_pictures,
+            hidden_pictures,
             connected: e.browser_connected.load(Ordering::SeqCst) || has_pictures,
             browser_connected: e.browser_connected.load(Ordering::SeqCst),
             browser_open: app.get_webview_window(browser_session::LABEL).is_some(),
@@ -354,10 +583,21 @@ async fn save_settings(e: tauri::State<'_, Arc<Engine>>, settings: Settings) -> 
     tauri::async_runtime::spawn_blocking(move || {
         exclusive(&e, || {
             settings.validate()?;
+            let previous_launch_at_login = e.library.lock().unwrap().settings.launch_at_login;
+            // Update the real OS registration before saving the preference so
+            // a portable build and an installed build behave the same way.
+            if previous_launch_at_login != settings.launch_at_login {
+                autostart::set(settings.launch_at_login)?;
+            }
             let mut lib = e.library.lock().unwrap();
             let mut updated = lib.clone();
             updated.settings = settings;
-            e.save(&updated)?;
+            if let Err(error) = e.save(&updated) {
+                if previous_launch_at_login != updated.settings.launch_at_login {
+                    let _ = autostart::set(previous_launch_at_login);
+                }
+                return Err(error);
+            }
             *lib = updated;
             Ok(())
         })
@@ -366,12 +606,30 @@ async fn save_settings(e: tauri::State<'_, Arc<Engine>>, settings: Settings) -> 
     .map_err(|_| "Settings could not be saved")?
 }
 #[tauri::command]
+fn autostart_status() -> Result<bool, String> {
+    autostart::is_enabled()
+}
+#[tauri::command]
 async fn next_wallpaper(e: tauri::State<'_, Arc<Engine>>) -> Result<(), String> {
     let e = e.inner().clone();
     tauri::async_runtime::spawn_blocking(move || exclusive(&e, || e.next(true)))
         .await
         .map_err(|_| "Wallpaper worker failed")?
 }
+
+/// Request cancellation without entering the exclusive-operation gate. The
+/// active foreground worker observes this flag between candidates and at each
+/// cache commit, while the command itself returns immediately so the UI can
+/// remain responsive during a slow network request.
+#[tauri::command]
+fn stop_wallpaper_change(e: tauri::State<'_, Arc<Engine>>) -> Result<(), String> {
+    if e.changing.load(Ordering::SeqCst) {
+        e.cancel_change.store(true, Ordering::SeqCst);
+        let _ = e.app.emit_to("main", "pinpaper-changed", ());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn feedback(e: tauri::State<'_, Arc<Engine>>, value: i8) -> Result<(), String> {
     let e = e.inner().clone();
@@ -405,17 +663,20 @@ async fn disconnect(app: tauri::AppHandle, e: tauri::State<'_, Arc<Engine>>) -> 
     let e = e.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         exclusive(&e, || {
+            browser_session::close_popups(&app);
             if let Some(w) = app.get_webview_window(browser_session::LABEL) {
                 w.destroy().map_err(|_| "Cannot close Pinterest window")?;
             }
+            // Resetting local data also removes the optional OS login entry;
+            // otherwise a fresh default library would disagree with startup.
+            autostart::set(false)?;
             e.browser_connected.store(false, Ordering::SeqCst);
             let mut lib = e.library.lock().unwrap();
             *lib = Library::default();
             e.preview.lock().unwrap().clear();
             e.save(&lib)?;
-            if e.cache.exists() {
-                fs::remove_dir_all(&e.cache).map_err(|_| "Signed out, but cache cleanup failed")?;
-            }
+            wallpaper::reset_cache(&e.cache, &e.cache_generation)?;
+            wallpaper::clear_all_temporary_unavailable();
             Ok(())
         })
     })
@@ -518,7 +779,8 @@ async fn browser_import(
                     .iter_mut()
                     .find(|p| p.id == pin.id && p.board_id == browser_session::SOURCE)
                 {
-                    *existing = pin;
+                    let prior = existing.clone();
+                    *existing = model::merge_imported_pin(&prior, pin);
                 } else {
                     updated.pins.push(pin);
                 }
@@ -587,7 +849,9 @@ fn main() {
         Box::new(tauri::generate_handler![
             snapshot,
             save_settings,
+            autostart_status,
             next_wallpaper,
+            stop_wallpaper_change,
             feedback,
             disconnect,
             open_pin,
@@ -607,7 +871,7 @@ fn main() {
         .setup(|app| {
             let data = app.path().app_data_dir()?;
             let cache = app.path().app_cache_dir()?.join("images");
-            let (library, error) = match fs::read(data.join("library.json")) {
+            let (mut library, error) = match fs::read(data.join("library.json")) {
                 Ok(b) => match serde_json::from_slice::<Library>(&b) {
                     Ok(lib) if lib.settings.validate().is_ok() => (lib, None),
                     _ => (
@@ -621,6 +885,9 @@ fn main() {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Library::default(), None),
                 Err(_) => (Library::default(), Some("Cannot read saved library".into())),
             };
+            let mut dimension_migration = model::canonicalize_dimensions(&mut library);
+            dimension_migration |= refresh_cached_dimensions(&cache, &mut library);
+            let library_for_save = dimension_migration.then(|| library.clone());
             let (warm, warm_receiver) = std::sync::mpsc::sync_channel(1);
             let engine = Arc::new(Engine {
                 app: app.handle().clone(),
@@ -628,15 +895,27 @@ fn main() {
                 error: Mutex::new(error),
                 busy: AtomicBool::new(false),
                 changing: AtomicBool::new(false),
+                cancel_change: AtomicBool::new(false),
                 change_status: Mutex::new(None),
                 warm,
                 browser_connected: AtomicBool::new(false),
                 bridge: browser_session::ImportBridge::default(),
                 data,
                 cache,
+                cache_generation: AtomicU64::new(0),
                 preview: Mutex::new(preview::PreviewCache::default()),
             });
+            if let Some(library_for_save) = library_for_save {
+                if let Err(save_error) = engine.save(&library_for_save) {
+                    *engine.error.lock().unwrap() = Some(save_error);
+                }
+            }
             app.manage(engine.clone());
+            if engine.library.lock().unwrap().settings.launch_at_login {
+                if let Err(startup_error) = autostart::set(true) {
+                    *engine.error.lock().unwrap() = Some(startup_error);
+                }
+            }
             prefetch::start(&engine, warm_receiver);
             let _ = engine.warm.try_send(());
             #[cfg(target_os = "macos")]
@@ -648,15 +927,19 @@ fn main() {
                 let callback = block2::RcBlock::new(
                     move |_: std::ptr::NonNull<objc2_foundation::NSNotification>| {
                         let Some(engine) = weak.upgrade() else { return };
-                        let path = engine
-                            .library
-                            .lock()
-                            .unwrap()
-                            .current
-                            .as_ref()
-                            .map(|pin| wallpaper::cached(&engine.cache, pin));
+                        let (path, display_mode) = {
+                            let library = engine.library.lock().unwrap();
+                            (
+                                library
+                                    .current
+                                    .as_ref()
+                                    .map(|pin| wallpaper::cached(&engine.cache, pin)),
+                                library.settings.display_mode.clone(),
+                            )
+                        };
                         if let Some(path) = path.filter(|p| p.exists()) {
-                            if let Err(error) = wallpaper::apply(&engine.app, &path) {
+                            if let Err(error) = wallpaper::apply(&engine.app, &path, &display_mode)
+                            {
                                 *engine.error.lock().unwrap() = Some(error);
                             }
                         }
@@ -816,12 +1099,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stop_wallpaper_change_is_registered_and_allowlisted() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/main.json"))
+                .expect("main capability must be valid JSON");
+        let permissions = capability["permissions"]
+            .as_array()
+            .expect("main capability must declare permissions");
+        assert!(permissions
+            .iter()
+            .any(|permission| permission == "allow-stop-wallpaper-change"));
+        assert!(include_str!("../build.rs").contains("\"stop_wallpaper_change\""));
+        assert!(include_str!("../permissions/autogenerated/stop_wallpaper_change.toml")
+            .contains("commands.allow = [\"stop_wallpaper_change\"]"));
+    }
+
+    #[test]
     fn bounded_search_errors_distinguish_network_filters_and_budget() {
         let network = selection_error(wallpaper::SelectionFailure {
             attempts: 2,
             max_attempts: 8,
             candidates: 4,
+            successful: 0,
+            target_successes: 1,
             exhausted_budget: false,
+            source_exhausted: true,
+            cancelled: false,
             errors: vec!["Image download returned HTTP 403".into()],
         });
         assert!(network.contains("could be downloaded"));
@@ -830,7 +1133,11 @@ mod tests {
             attempts: 2,
             max_attempts: 8,
             candidates: 2,
+            successful: 0,
+            target_successes: 1,
             exhausted_budget: false,
+            source_exhausted: true,
+            cancelled: false,
             errors: vec![
                 "Downloaded images do not meet your resolution/orientation filters".into(),
             ],
@@ -838,13 +1145,17 @@ mod tests {
         assert!(filters.contains("match the resolution/orientation filters"));
 
         let budget = selection_error(wallpaper::SelectionFailure {
-            attempts: 8,
-            max_attempts: 8,
+            attempts: 3,
+            max_attempts: 3,
             candidates: 20,
+            successful: 0,
+            target_successes: 1,
             exhausted_budget: true,
+            source_exhausted: false,
+            cancelled: false,
             errors: vec!["Image download failed".into()],
         });
         assert!(budget.contains("Wallpaper search paused"));
-        assert!(budget.contains("limit 8"));
+        assert!(budget.contains("limit 3"));
     }
 }

@@ -1,0 +1,111 @@
+name: Desktop release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macOS
+            os: macos-latest
+            bundles: dmg
+          - platform: Windows
+            os: windows-latest
+            bundles: none
+          - platform: Linux
+            os: ubuntu-24.04
+            bundles: appimage,deb
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev libfuse2t64
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Run application tests
+        run: npm test
+
+      - name: Run Rust tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Build macOS DMG or Linux bundles
+        if: runner.os != 'Windows'
+        run: |
+          npm run tauri -- build --bundles "${{ matrix.bundles }}"
+          mkdir -p release-assets
+          version=$(node -p "require('./package.json').version")
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            bundle=$(find src-tauri/target/release/bundle -type f -name '*.dmg' -print -quit)
+            test -n "$bundle"
+            cp "$bundle" "release-assets/Pinpaper_${version}_macOS.dmg"
+          else
+            appimage=$(find src-tauri/target/release/bundle -type f -name '*.AppImage' -print -quit)
+            deb=$(find src-tauri/target/release/bundle -type f -name '*.deb' -print -quit)
+            test -n "$appimage"
+            test -n "$deb"
+            cp "$appimage" "release-assets/Pinpaper_${version}_linux.AppImage"
+            cp "$deb" "release-assets/Pinpaper_${version}_linux.deb"
+          fi
+
+      - name: Build Windows portable executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          npm run tauri -- build --no-bundle
+          $version = node -p "require('./package.json').version"
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          $exe = "src-tauri/target/release/pinpaper.exe"
+          if (-not (Test-Path $exe)) { throw "Portable executable was not produced at $exe" }
+          Copy-Item $exe "release-assets/Pinpaper_${version}_x64-portable.exe"
+
+      - name: Upload platform artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pinpaper-${{ matrix.platform }}
+          path: release-assets
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create release and attach bundles
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true

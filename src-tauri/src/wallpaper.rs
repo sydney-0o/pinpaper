@@ -5,25 +5,127 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock, Weak},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, OnceLock, Weak,
+    },
     time::{Duration, Instant},
 };
 const MAX_DOWNLOAD: u64 = 25 * 1024 * 1024;
-pub const MAX_FOREGROUND_ATTEMPTS: usize = 8;
-pub const FOREGROUND_SEARCH_BUDGET: Duration = Duration::from_secs(90);
+/// A foreground change can be stopped explicitly from the UI. This sentinel
+/// lets the selection loop return a neutral cancellation result instead of
+/// treating the user's stop request as a failed image.
+pub const CHANGE_CANCELLED: &str = "Wallpaper change stopped";
+/// A foreground change applies one wallpaper, so its success target is one
+/// successfully prepared/saved image. The retry budget is separate: it is the
+/// finite set of distinct saved-picture candidates in the current round.
+pub const FOREGROUND_TARGET_SUCCESSES: usize = 1;
+// Each network request remains bounded by reqwest's client timeout. The
+// foreground search itself has no arbitrary attempt ceiling: its finite input
+// is the currently selected set of saved pictures, with each distinct image
+// inspected at most once per rotation round.
+pub const FOREGROUND_SEARCH_BUDGET: Duration = Duration::MAX;
+fn cache_identity(pin: &Pin) -> String {
+    match pin.source_url.as_deref() {
+        Some(source) => format!("{}\0{}", pin.url, source),
+        None => pin.url.clone(),
+    }
+}
 pub fn quality_cache(dir: &Path, pin: &Pin) -> PathBuf {
     dir.join(format!(
         "lossless-v2-{:x}.png",
-        Sha256::digest(pin.url.as_bytes())
+        Sha256::digest(cache_identity(pin).as_bytes())
     ))
 }
 pub fn cached(dir: &Path, pin: &Pin) -> PathBuf {
     let upgraded = quality_cache(dir, pin);
+    // A decoded thumbnail is not evidence that the original was attempted.
+    // Both foreground and prefetch prepare metadata before using this cache.
+    if network::needs_pin_resolution(pin) {
+        return upgraded.with_extension("pending");
+    }
+    if pin.source_url.is_some() {
+        // A Pinterest fallback written after a temporary source outage is
+        // intentionally retried later. Reuse this cache only after the
+        // persisted dimensions provenance proves that its pixels came from
+        // the external image URL.
+        if upgraded.exists()
+            && pin.dimensions_url.as_deref().is_some_and(|url| {
+                network::valid_source_url(url) && !network::valid_image_url(url)
+            })
+        {
+            return upgraded;
+        }
+        if upgraded.exists() && network::external_source_backoff(pin) {
+            // The external page/image was already tried recently and failed
+            // or was rejected as ambiguous. Reuse the decoded Pinterest
+            // fallback during the short negative-cache window.
+            return upgraded;
+        }
+        if upgraded.exists() {
+            // Keep the fallback file on disk for recovery/diagnostics, but do
+            // not expose it as a ready candidate while the source URL can be
+            // retried.
+            return upgraded.with_extension("retry");
+        }
+        return upgraded;
+    }
     if upgraded.exists() {
         upgraded
     } else {
         dir.join(format!("{:x}.jpg", Sha256::digest(pin.url.as_bytes())))
     }
+}
+
+/// Read the dimensions of the image stored on disk, including the EXIF
+/// orientation that is applied to legacy JPEG caches. This is the only
+/// dimension source used after a download: Pinterest page metadata never
+/// overrides pixels that were actually decoded from the cache.
+pub fn decoded_dimensions(path: &Path) -> Result<(u32, u32), String> {
+    use image::ImageDecoder;
+
+    let mut reader = image::ImageReader::open(path)
+        .map_err(|_| "Cached image could not be read")?
+        .with_guessed_format()
+        .map_err(|_| "Unknown cached image format")?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16384);
+    limits.max_image_height = Some(16384);
+    reader.limits(limits);
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|_| "Cached image could not be decoded")?;
+    let orientation = decoder
+        .orientation()
+        .map_err(|_| "Cached image orientation could not be read")?;
+    let (width, height) = decoder.dimensions();
+    if width == 0 || height == 0 || width > 16384 || height > 16384 {
+        return Err("Cached image exceeds safety limits".into());
+    }
+    let swaps_axes = matches!(
+        orientation,
+        image::metadata::Orientation::Rotate90
+            | image::metadata::Orientation::Rotate270
+            | image::metadata::Orientation::Rotate90FlipH
+            | image::metadata::Orientation::Rotate270FlipH
+    );
+    Ok(if swaps_axes {
+        (height, width)
+    } else {
+        (width, height)
+    })
+}
+
+pub fn cached_dimensions(dir: &Path, pin: &Pin) -> Option<(u32, u32)> {
+    // Inspection still reports the real bytes of a cached fallback while a
+    // quality upgrade is pending. Selection uses `cached` separately.
+    let current = quality_cache(dir, pin);
+    let path = if current.exists() { current } else {
+        dir.join(format!("{:x}.jpg", Sha256::digest(pin.url.as_bytes())))
+    };
+    path.exists()
+        .then(|| decoded_dimensions(&path).ok())
+        .flatten()
 }
 // Shared by foreground and prefetch: one writer per URL, with a cache
 // recheck after acquiring the lock. Different URLs never block each other.
@@ -38,42 +140,113 @@ fn download_lock(path: &Path) -> Arc<Mutex<()>> {
     locks.insert(path.to_owned(), Arc::downgrade(&lock));
     lock
 }
+
+/// Coordinates the small commit/cleanup section of cache operations. Network
+/// requests and image decoding happen outside this lock, so resetting a large
+/// cache never waits for a download to finish before the UI can start its
+/// background operation.
+pub fn cache_gate() -> &'static Mutex<()> {
+    static GATE: OnceLock<Mutex<()>> = OnceLock::new();
+    GATE.get_or_init(|| Mutex::new(()))
+}
+
+/// Invalidate all older background cache jobs and remove the image cache as a
+/// single reset-safe operation. The generation is advanced while holding the
+/// same gate used by `download_with_guard`, so a job either commits before the
+/// reset and is removed here, or observes the new generation and commits
+/// nothing.
+pub fn reset_cache(dir: &Path, generation: &AtomicU64) -> Result<(), String> {
+    let _gate = cache_gate().lock().map_err(|_| "Image cache is busy")?;
+    generation.fetch_add(1, Ordering::SeqCst);
+    cache_sources().lock().unwrap().clear();
+    network::clear_external_source_cache();
+    if dir.exists() {
+        fs::remove_dir_all(dir).map_err(|error| {
+            format!("Reset completed except image cache cleanup failed: {error}")
+        })?;
+    }
+    Ok(())
+}
+#[cfg(test)]
 fn cache_once(
     path: &Path,
-    load: impl FnOnce() -> Result<PathBuf, String>,
-) -> Result<PathBuf, String> {
+    load: impl FnOnce() -> Result<(PathBuf, String), String>,
+) -> Result<(PathBuf, String), String> {
+    cache_once_with_policy(path, true, load)
+}
+
+fn cache_once_with_policy(
+    path: &Path,
+    reuse_existing: bool,
+    load: impl FnOnce() -> Result<(PathBuf, String), String>,
+) -> Result<(PathBuf, String), String> {
     let lock = download_lock(path);
     let _writer = lock.lock().unwrap();
-    if path.exists() {
-        return Ok(path.to_owned());
+    if reuse_existing && path.exists() {
+        let source_url = cache_sources()
+            .lock()
+            .unwrap()
+            .get(path)
+            .cloned()
+            .unwrap_or_default();
+        return Ok((path.to_owned(), source_url));
     }
-    load()
+    let result = load();
+    if let Ok((cached_path, source_url)) = &result {
+        cache_sources()
+            .lock()
+            .unwrap()
+            .insert(cached_path.clone(), source_url.clone());
+    }
+    result
+}
+
+fn cache_sources() -> &'static Mutex<HashMap<PathBuf, String>> {
+    static SOURCES: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
+    SOURCES.get_or_init(Default::default)
 }
 #[derive(Debug)]
 pub struct SelectionFailure {
     pub attempts: usize,
     pub max_attempts: usize,
     pub candidates: usize,
+    pub successful: usize,
+    pub target_successes: usize,
     pub exhausted_budget: bool,
+    pub source_exhausted: bool,
+    pub cancelled: bool,
     pub errors: Vec<String>,
 }
 
-/// Try reusable candidates first, then download candidates one at a time with
-/// a finite attempt/time budget. Candidate keys are deduplicated before any
-/// preparation work so a failing pin or URL cannot be retried in one click.
-pub fn select_bounded<P, T>(
+#[derive(Debug)]
+pub struct DownloadedImage {
+    pub path: PathBuf,
+    pub source_url: String,
+}
+
+/// Try candidates one at a time until the success target is reached or the
+/// finite candidate source/budget is exhausted. Candidate keys are
+/// deduplicated before any preparation work so a failing pin or URL cannot be
+/// retried in one click. Successful results are retained so callers can use a
+/// target larger than one without changing the retry semantics.
+fn select_bounded_with_order<P, T>(
     pins: impl IntoIterator<Item = P>,
     mut ready: impl FnMut(&P) -> bool,
     mut candidate_keys: impl FnMut(&P) -> (String, String),
     max_attempts: usize,
+    target_successes: usize,
     time_budget: Duration,
     mut on_attempt: impl FnMut(usize, &P),
     mut on_failure: impl FnMut(usize, &P, &str),
     mut prepare: impl FnMut(P) -> Result<T, String>,
-) -> Result<T, SelectionFailure>
+    prefer_ready: bool,
+) -> Result<Vec<T>, SelectionFailure>
 where
     P: Clone,
 {
+    if target_successes == 0 {
+        return Ok(Vec::new());
+    }
     let mut ids = HashSet::new();
     let mut urls = HashSet::new();
     let candidates: Vec<P> = pins
@@ -84,24 +257,37 @@ where
         })
         .collect();
     let candidate_count = candidates.len();
-    let mut reusable = Vec::new();
-    let mut missing = Vec::new();
-    for pin in candidates {
-        if ready(&pin) {
-            reusable.push(pin);
-        } else {
-            missing.push(pin);
+    let ordered = if prefer_ready {
+        let mut reusable = Vec::new();
+        let mut missing = Vec::new();
+        for pin in candidates {
+            if ready(&pin) {
+                reusable.push(pin);
+            } else {
+                missing.push(pin);
+            }
         }
-    }
-    let ordered = reusable.into_iter().chain(missing).collect::<Vec<_>>();
-    let deadline = Instant::now() + time_budget;
+        reusable.into_iter().chain(missing).collect::<Vec<_>>()
+    } else {
+        candidates
+    };
+    // `Duration::MAX` deliberately disables the overall wall-clock cutoff.
+    // Keep a finite budget available for unit tests and callers that need one,
+    // while avoiding an Instant overflow for the unbounded-by-time production
+    // search.
+    let deadline = if time_budget.is_zero() {
+        Some(Instant::now())
+    } else {
+        Instant::now().checked_add(time_budget)
+    };
     let mut errors = Vec::new();
     let mut attempts = 0;
+    let mut successful = Vec::new();
     let mut exhausted_budget = max_attempts == 0 || time_budget.is_zero();
     for pin in &ordered {
         if exhausted_budget
             || attempts >= max_attempts
-            || (attempts > 0 && Instant::now() >= deadline)
+            || deadline.is_some_and(|deadline| attempts > 0 && Instant::now() >= deadline)
         {
             exhausted_budget = true;
             break;
@@ -109,20 +295,159 @@ where
         attempts += 1;
         on_attempt(attempts, pin);
         match prepare(pin.clone()) {
-            Ok(result) => return Ok(result),
+            Ok(result) => {
+                successful.push(result);
+                if successful.len() >= target_successes {
+                    return Ok(successful);
+                }
+            }
             Err(error) => {
+                if error == CHANGE_CANCELLED {
+                    return Err(SelectionFailure {
+                        attempts,
+                        // `usize::MAX` is the unbounded production mode. The
+                        // meaningful limit shown to the user is the number of
+                        // distinct saved-picture candidates in this round.
+                        max_attempts: if max_attempts == usize::MAX {
+                            candidate_count
+                        } else {
+                            max_attempts
+                        },
+                        candidates: candidate_count,
+                        successful: successful.len(),
+                        target_successes,
+                        exhausted_budget: false,
+                        source_exhausted: false,
+                        cancelled: true,
+                        errors: Vec::new(),
+                    });
+                }
                 on_failure(attempts, pin, &error);
                 errors.push(error);
             }
         }
     }
+    let source_exhausted = !exhausted_budget && attempts >= ordered.len();
     Err(SelectionFailure {
         attempts,
-        max_attempts,
+        // The foreground call uses `usize::MAX` as a marker for an
+        // unbounded-by-attempts search. Report the finite candidate count so
+        // progress and diagnostics describe the actual saved-picture limit.
+        max_attempts: if max_attempts == usize::MAX {
+            candidate_count
+        } else {
+            max_attempts
+        },
         candidates: candidate_count,
+        successful: successful.len(),
+        target_successes,
         exhausted_budget,
+        source_exhausted,
+        cancelled: false,
         errors,
     })
+}
+
+/// Try reusable candidates first, then download candidates one at a time.
+/// This is kept for callers whose input order is not a rotation priority.
+#[cfg(test)]
+fn select_bounded<P, T>(
+    pins: impl IntoIterator<Item = P>,
+    ready: impl FnMut(&P) -> bool,
+    candidate_keys: impl FnMut(&P) -> (String, String),
+    max_attempts: usize,
+    time_budget: Duration,
+    on_attempt: impl FnMut(usize, &P),
+    on_failure: impl FnMut(usize, &P, &str),
+    prepare: impl FnMut(P) -> Result<T, String>,
+) -> Result<T, SelectionFailure>
+where
+    P: Clone,
+{
+    select_bounded_with_order(
+        pins,
+        ready,
+        candidate_keys,
+        max_attempts,
+        1,
+        time_budget,
+        on_attempt,
+        on_failure,
+        prepare,
+        true,
+    )
+    .map(|mut results| {
+        results
+            .pop()
+            .expect("a one-success selection must return one result")
+    })
+}
+
+/// Run the foreground wallpaper search with its production retry policy.
+///
+/// Keeping this policy at the call boundary prevents a foreground caller from
+/// accidentally inheriting the background worker's two-item warm-up limit.
+/// Each attempt still represents one distinct image candidate; a candidate's
+/// original URL and its observed fallback are handled inside `download`.
+#[cfg(test)]
+pub fn select_foreground<P, T>(
+    pins: impl IntoIterator<Item = P>,
+    ready: impl FnMut(&P) -> bool,
+    candidate_keys: impl FnMut(&P) -> (String, String),
+    on_attempt: impl FnMut(usize, &P),
+    on_failure: impl FnMut(usize, &P, &str),
+    prepare: impl FnMut(P) -> Result<T, String>,
+) -> Result<T, SelectionFailure>
+where
+    P: Clone,
+{
+    select_foreground_with_target(
+        pins,
+        FOREGROUND_TARGET_SUCCESSES,
+        ready,
+        candidate_keys,
+        on_attempt,
+        on_failure,
+        prepare,
+    )
+    .map(|mut results| {
+        results
+            .pop()
+            .expect("a one-success foreground selection must return one result")
+    })
+}
+
+/// Run a foreground search with an explicit number of successful prepared
+/// images as its goal. The current wallpaper-change command passes one because
+/// it applies one wallpaper per invocation; tests and future batch callers can
+/// use a larger target without reintroducing an attempt ceiling.
+pub fn select_foreground_with_target<P, T>(
+    pins: impl IntoIterator<Item = P>,
+    target_successes: usize,
+    ready: impl FnMut(&P) -> bool,
+    candidate_keys: impl FnMut(&P) -> (String, String),
+    on_attempt: impl FnMut(usize, &P),
+    on_failure: impl FnMut(usize, &P, &str),
+    prepare: impl FnMut(P) -> Result<T, String>,
+) -> Result<Vec<T>, SelectionFailure>
+where
+    P: Clone,
+{
+    select_bounded_with_order(
+        pins,
+        ready,
+        candidate_keys,
+        // There is no fixed retry ceiling anymore. The helper still receives
+        // a finite vector and therefore visits no more than the number of
+        // distinct saved-picture candidates supplied for this change.
+        usize::MAX,
+        target_successes,
+        FOREGROUND_SEARCH_BUDGET,
+        on_attempt,
+        on_failure,
+        prepare,
+        false,
+    )
 }
 #[cfg(test)]
 fn first_usable<P, T>(
@@ -158,66 +483,219 @@ pub fn clear_temporary_unavailable<'a>(pins: impl IntoIterator<Item = &'a Pin>) 
     }
 }
 
-pub fn download(dir: &Path, pin: &Pin) -> Result<PathBuf, String> {
+/// A local-data reset starts a new library, so URL failure cooldowns from the
+/// old library must not affect a later import of the same Pinterest pin.
+pub fn clear_all_temporary_unavailable() {
+    failures().lock().unwrap().clear();
+}
+
+/// Build the candidates for one foreground change. Manual changes explicitly
+/// bypass the background failure cooldown, while scheduled changes continue to
+/// honor it. Cached images remain eligible in either mode.
+pub fn foreground_candidates(
+    pins: impl IntoIterator<Item = Pin>,
+    cache: &Path,
+    manual_retry: bool,
+) -> Vec<Pin> {
+    pins.into_iter()
+        .filter(|pin| {
+            cached(cache, pin).exists()
+                || manual_retry
+                || !temporarily_unavailable(pin)
+                // A legacy /originals/ URL needs the bounded page repair in
+                // the foreground path and must not be hidden by prefetch state.
+                || (pin.fallback_url.is_none()
+                    && network::is_original_url(&pin.url)
+                    && !pin.original_url_exact)
+        })
+        .collect()
+}
+
+fn decoded_image_is_better(candidate: &image::DynamicImage, current: &image::DynamicImage) -> bool {
+    let candidate_area = u64::from(candidate.width())
+        .saturating_mul(u64::from(candidate.height()));
+    let current_area = u64::from(current.width()).saturating_mul(u64::from(current.height()));
+    candidate_area > current_area
+        || (candidate_area == current_area && candidate.width() > current.width())
+}
+
+/// Download an image and commit it only while `can_commit` is still true.
+/// Callers use this for background work that may outlive a local-data reset.
+/// The callback is checked while holding the same gate used by reset, making a
+/// generation change and cache cleanup mutually exclusive with the final
+/// rename and preview write.
+pub fn download_with_guard(
+    dir: &Path,
+    pin: &Pin,
+    can_commit: impl Fn() -> bool,
+) -> Result<DownloadedImage, String> {
     if !network::valid_image_url(&pin.url) {
         return Err("Image is not hosted on Pinterest's image CDN".into());
     }
-    fs::create_dir_all(dir).map_err(|_| "Cannot create image cache")?;
     let path = quality_cache(dir, pin);
-    let result = cache_once(&path, || {
+    let reuse_existing = pin.source_url.is_none()
+        || network::external_source_backoff(pin)
+        || pin.dimensions_url.as_deref().is_some_and(|url| {
+            network::valid_source_url(url) && !network::valid_image_url(url)
+        });
+    let result = cache_once_with_policy(&path, reuse_existing, || {
         let client = network::client()?;
-        let original = network::original_url(&pin.url);
-        let mut response = client.get(&original).send().map_err(|error| {
-            if error.is_timeout() {
-                "Image download timed out after 30 seconds"
-            } else {
-                "Image download failed"
+        let preferred = network::preferred_download_url(pin);
+        let guessed_original_has_fallback = network::is_original_url(&pin.url)
+            && !pin.original_url_exact
+            && pin.fallback_url.is_some();
+        let external = network::resolve_external_image(pin).map(|resolved| resolved.image_url);
+        if !can_commit() {
+            return Err("Image download cancelled by local-data reset".into());
+        }
+        let mut candidates: Vec<(String, bool)> = Vec::new();
+        if let Some(url) = external {
+            candidates.push((url, true));
+        }
+        for candidate in [
+            preferred,
+            pin.url.clone(),
+            pin.fallback_url.clone().unwrap_or_default(),
+        ] {
+            if candidate.is_empty()
+                || (guessed_original_has_fallback && candidate == pin.url)
+                || !network::valid_image_url(&candidate)
+                || !network::same_asset(&candidate, &pin.url)
+                || candidates.iter().any(|(seen, _)| seen == &candidate)
+            {
+                continue;
             }
-        })?;
-        // Fall back only when the preferred URL is absent, never because of a
-        // timeout. Every fallback was either imported from the page or is the
-        // exact source URL supplied by the page; no URL variants are invented.
-        if matches!(response.status().as_u16(), 403 | 404 | 410) {
-            let mut fallbacks = Vec::new();
-            for candidate in [Some(pin.url.as_str()), pin.fallback_url.as_deref()] {
-                if let Some(candidate) =
-                    candidate.filter(|url| *url != original && network::valid_image_url(url))
-                {
-                    if !fallbacks.iter().any(|seen| seen == &candidate) {
-                        fallbacks.push(candidate);
+            candidates.push((candidate, false));
+        }
+        let mut last_error = "Image download failed".to_owned();
+        let mut selected: Option<(image::DynamicImage, String, bool)> = None;
+        let mut external_attempted = false;
+        for (candidate, is_external) in candidates {
+            if !can_commit() {
+                return Err("Image download cancelled by local-data reset".into());
+            }
+            if is_external {
+                external_attempted = true;
+            }
+            let response = if is_external {
+                let source_client = match network::source_client_for_url(&candidate) {
+                    Ok(client) => client,
+                    Err(_) => {
+                        last_error = "External source address was not public".into();
+                        continue;
+                    }
+                };
+                source_client.get(&candidate).send()
+            } else {
+                client.get(&candidate).send()
+            };
+            let response = match response {
+                Ok(response) => response,
+                Err(error) => {
+                    last_error = if error.is_timeout() {
+                        "Image download timed out after 30 seconds".into()
+                    } else {
+                        "Image download failed".into()
+                    };
+                    // A source page/image is optional. Pinterest remains the
+                    // authoritative fallback when the external host is down.
+                    if is_external {
+                        continue;
+                    }
+                    break;
+                }
+            };
+            if !response.status().is_success() {
+                last_error = format!("Image download returned HTTP {}", response.status());
+                if is_external || matches!(response.status().as_u16(), 403 | 404 | 410) {
+                    continue;
+                }
+                break;
+            }
+            if response.content_length().unwrap_or(0) > MAX_DOWNLOAD {
+                last_error = "Image exceeds 25 MB".into();
+                if is_external {
+                    continue;
+                }
+                break;
+            }
+            let mut bytes = vec![];
+            if response
+                .take(MAX_DOWNLOAD + 1)
+                .read_to_end(&mut bytes)
+                .is_err()
+            {
+                last_error = "Image download interrupted".into();
+                if is_external {
+                    continue;
+                }
+                break;
+            }
+            if bytes.len() as u64 > MAX_DOWNLOAD {
+                last_error = "Image exceeds 25 MB".into();
+                if is_external {
+                    continue;
+                }
+                break;
+            }
+            if !can_commit() {
+                return Err("Image download cancelled by local-data reset".into());
+            }
+            match decode_oriented(bytes) {
+                Ok(decoded) => {
+                    let replace = selected
+                        .as_ref()
+                        .map(|(current, _, _)| decoded_image_is_better(&decoded, current))
+                        .unwrap_or(true);
+                    if replace {
+                        selected = Some((decoded, candidate, is_external));
+                    }
+                    // The first successfully decoded Pinterest candidate is
+                    // already the observed preferred variant (or its supplied
+                    // fallback). There is no quality benefit in downloading
+                    // the same asset's lower CDN variants after that baseline;
+                    // the comparison above has already decided whether the
+                    // external file wins.
+                    if !is_external {
+                        break;
                     }
                 }
-            }
-            for candidate in fallbacks {
-                response = client
-                    .get(candidate)
-                    .send()
-                    .map_err(|_| "Image fallback download failed")?;
-                if response.status().is_success()
-                    || !matches!(response.status().as_u16(), 403 | 404 | 410)
-                {
+                Err(error) => {
+                    last_error = error;
+                    if is_external {
+                        continue;
+                    }
                     break;
                 }
             }
         }
-        if !response.status().is_success() {
-            return Err(format!(
-                "Image download returned HTTP {}",
-                response.status()
-            ));
+        if external_attempted
+            && selected
+                .as_ref()
+                .map(|(_, _, is_external)| !*is_external)
+                .unwrap_or(true)
+        {
+            // Remember a source request that could not provide a better
+            // decoded image. The Pinterest fallback stays reusable for a
+            // short TTL instead of causing a page walk on every wallpaper
+            // change.
+            network::mark_external_source_unavailable(pin);
         }
-        if response.content_length().unwrap_or(0) > MAX_DOWNLOAD {
-            return Err("Image exceeds 25 MB".into());
+        let Some((decoded, source_url, _)) = selected else {
+            return Err(last_error);
+        };
+        // Do not create the cache directory until the reset-safe commit
+        // section. An old prefetch job can therefore finish its request after
+        // reset without recreating an empty cache or leaving a thumbnail.
+        let _gate = cache_gate().lock().map_err(|_| "Image cache unavailable")?;
+        if !can_commit() {
+            return Err("Image download cancelled by local-data reset".into());
         }
-        let mut bytes = vec![];
-        response
-            .take(MAX_DOWNLOAD + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| "Image download interrupted")?;
-        if bytes.len() as u64 > MAX_DOWNLOAD {
-            return Err("Image exceeds 25 MB".into());
+        if !reuse_existing {
+            let _ = fs::remove_file(&path);
+            let _ = fs::remove_file(path.with_extension("preview.jpg"));
         }
-        let decoded = decode_oriented(bytes)?;
+        fs::create_dir_all(dir).map_err(|_| "Cannot create image cache")?;
         let temp = path.with_extension("tmp");
         // Lossless, but use fast compression: wallpaper changes must not wait
         // for a high-compression PNG pass over millions of pixels.
@@ -238,17 +716,30 @@ pub fn download(dir: &Path, pin: &Pin) -> Result<PathBuf, String> {
             let _ = fs::remove_file(&temp);
             return Err("Decoded PNG exceeds 256 MB".into());
         }
+        if !can_commit() {
+            let _ = fs::remove_file(&temp);
+            return Err("Image download cancelled by local-data reset".into());
+        }
         fs::rename(&temp, &path).map_err(|_| "Cannot finish cached image")?;
+        if !can_commit() {
+            let _ = fs::remove_file(&path);
+            let _ = fs::remove_file(path.with_extension("preview.jpg"));
+            return Err("Image download cancelled by local-data reset".into());
+        }
         let _ = crate::preview::prepare(&path, &decoded);
-        Ok(path.clone())
+        Ok((path.clone(), source_url))
     });
-    if result.is_err() {
+    if result
+        .as_ref()
+        .err()
+        .is_some_and(|error| !error.contains("cancelled by local-data reset"))
+    {
         failures()
             .lock()
             .unwrap()
             .insert(pin.url.clone(), std::time::Instant::now());
     }
-    result
+    result.map(|(path, source_url)| DownloadedImage { path, source_url })
 }
 fn decode_oriented(bytes: Vec<u8>) -> Result<image::DynamicImage, String> {
     use image::ImageDecoder;
@@ -272,32 +763,119 @@ fn decode_oriented(bytes: Vec<u8>) -> Result<image::DynamicImage, String> {
     Ok(decoded)
 }
 #[cfg(target_os = "macos")]
-pub fn apply(app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
+fn tiled_wallpaper(path: &Path, width: u32, height: u32) -> Result<PathBuf, String> {
+    let source = image::open(path)
+        .map_err(|_| "Could not decode the wallpaper for tiling".to_owned())?
+        .to_rgba8();
+    if source.width() == 0 || source.height() == 0 {
+        return Err("Wallpaper has no pixels to tile".into());
+    }
+    let width = width.min(16384);
+    let height = height.min(16384);
+    let pixels = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or("Tiled wallpaper is too large")?;
+    if pixels > 256 * 1024 * 1024 {
+        return Err("Tiled wallpaper exceeds 256 MB".into());
+    }
+    let key = format!("{}:{}x{}", path.to_string_lossy(), width, height);
+    let output = path
+        .parent()
+        .ok_or("Wallpaper cache has no parent directory")?
+        .join(format!(
+            "tile-v1-{:x}-{}x{}.png",
+            Sha256::digest(key),
+            width,
+            height
+        ));
+    if output.exists() {
+        return Ok(output);
+    }
+    let mut tiled = image::RgbaImage::new(width, height);
+    for y in 0..height {
+        for x in 0..width {
+            tiled.put_pixel(
+                x,
+                y,
+                *source.get_pixel(x % source.width(), y % source.height()),
+            );
+        }
+    }
+    let temp = output.with_extension("tmp");
+    let file = fs::File::create(&temp).map_err(|_| "Cannot write tiled wallpaper cache")?;
+    let encoder = image::codecs::png::PngEncoder::new_with_quality(
+        std::io::BufWriter::new(file),
+        image::codecs::png::CompressionType::Fast,
+        image::codecs::png::FilterType::Sub,
+    );
+    image::DynamicImage::ImageRgba8(tiled)
+        .write_with_encoder(encoder)
+        .map_err(|_| "Cannot encode tiled wallpaper")?;
+    fs::rename(&temp, &output).map_err(|_| "Cannot finish tiled wallpaper cache")?;
+    Ok(output)
+}
+
+#[cfg(target_os = "macos")]
+pub fn apply(app: &tauri::AppHandle, path: &Path, display_mode: &str) -> Result<(), String> {
     let path = path.to_path_buf();
+    let display_mode = display_mode.to_owned();
     let perform = move || -> Result<(), String> {
+        use objc2::runtime::AnyObject;
         use objc2::MainThreadMarker;
-        use objc2_app_kit::{NSScreen, NSWorkspace};
-        use objc2_foundation::{NSDictionary, NSString, NSURL};
+        use objc2_app_kit::{
+            NSScreen, NSWorkspace, NSWorkspaceDesktopImageAllowClippingKey,
+            NSWorkspaceDesktopImageScalingKey,
+        };
+        use objc2_foundation::{NSMutableDictionary, NSNumber, NSString, NSURL};
         let main =
             MainThreadMarker::new().ok_or("Wallpaper update requires the macOS main thread")?;
-        let path = path.to_str().ok_or("Invalid wallpaper file path")?;
-        let url = NSURL::fileURLWithPath(&NSString::from_str(path));
         let workspace = NSWorkspace::sharedWorkspace();
         let screens = NSScreen::screens(main);
         if screens.is_empty() {
             return Err("No connected display found".into());
         }
         for screen in screens.iter() {
+            let screen_path = if display_mode == "tile" {
+                let frame = screen.frame();
+                let scale = screen.backingScaleFactor().max(1.0);
+                let width = (frame.size.width * scale).round() as u32;
+                let height = (frame.size.height * scale).round() as u32;
+                tiled_wallpaper(&path, width, height)?
+            } else {
+                path.clone()
+            };
+            let path_text = screen_path.to_str().ok_or("Invalid wallpaper file path")?;
+            let url = NSURL::fileURLWithPath(&NSString::from_str(path_text));
             if workspace
                 .desktopImageURLForScreen(&screen)
                 .and_then(|current| current.path())
-                .is_some_and(|current| current.to_string() == path)
+                .is_some_and(|current| current.to_string() == path_text)
             {
                 continue;
             }
             let options = workspace
                 .desktopImageOptionsForScreen(&screen)
-                .unwrap_or_else(NSDictionary::new);
+                .map(|existing| NSMutableDictionary::dictionaryWithDictionary(&existing))
+                .unwrap_or_else(NSMutableDictionary::new);
+            let (scaling, clipping) = match display_mode.as_str() {
+                // NSImageScaleProportionallyUpOrDown = 3.
+                "fit" => (3, false),
+                "center" | "tile" => (2, false), // NSImageScaleNone = 2.
+                // NSImageScaleAxesIndependently = 1.
+                "stretch" => (1, false),
+                _ => (3, true),
+            };
+            let scaling = NSNumber::new_isize(scaling);
+            let clipping = NSNumber::new_bool(clipping);
+            let scaling_object: &AnyObject = scaling.as_ref();
+            let clipping_object: &AnyObject = clipping.as_ref();
+            // objc2 exposes these AppKit option keys as extern statics. They are
+            // immutable process-wide constants owned by AppKit.
+            unsafe {
+                options.insert(NSWorkspaceDesktopImageScalingKey, scaling_object);
+                options.insert(NSWorkspaceDesktopImageAllowClippingKey, clipping_object);
+            }
             // Options originate from NSWorkspace; AppKit calls run on the main thread.
             unsafe {
                 workspace.setDesktopImageURL_forScreen_options_error(&url, &screen, &options)
@@ -324,7 +902,7 @@ pub fn apply(app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
         .map_err(|_| "macOS wallpaper update interrupted")?
 }
 #[cfg(target_os = "windows")]
-pub fn apply(_app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
+pub fn apply(_app: &tauri::AppHandle, path: &Path, _display_mode: &str) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         SystemParametersInfoW, SPIF_SENDCHANGE, SPIF_UPDATEINIFILE, SPI_SETDESKWALLPAPER,
@@ -345,7 +923,7 @@ pub fn apply(_app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
     }
 }
 #[cfg(target_os = "linux")]
-pub fn apply(_app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
+pub fn apply(_app: &tauri::AppHandle, path: &Path, _display_mode: &str) -> Result<(), String> {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP")
         .unwrap_or_default()
         .to_lowercase();
@@ -386,6 +964,49 @@ pub fn apply(_app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
 mod download_tests {
     use super::*;
     #[test]
+    fn old_decoded_thumbnail_cache_requires_metadata_recovery() {
+        let dir = std::env::temp_dir().join(format!("pinpaper-thumbnail-regression-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut pin = Pin { id: "000000042424242".into(),
+            url: "https://i.pinimg.com/236x/regression.jpg".into(),
+            width: 236, height: 157, dimensions_verified: true,
+            dimensions_source: crate::model::DimensionSource::Decoded,
+            dimensions_url: Some("https://i.pinimg.com/236x/regression.jpg".into()),
+            ..Default::default() };
+        let path = quality_cache(&dir, &pin);
+        image::RgbImage::new(236, 157).save(&path).unwrap();
+        assert!(network::needs_pin_resolution(&pin));
+        assert!(!cached(&dir, &pin).exists());
+        // A confirmed original uses a separate existing cache key, without
+        // deleting the user's old fallback files.
+        pin.url = "https://i.pinimg.com/originals/regression.png".into();
+        pin.original_url_exact = true;
+        assert!(!network::needs_pin_resolution(&pin));
+        assert_ne!(quality_cache(&dir, &pin), path);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[ignore = "explicit live Pinterest recovery; writes only to a temporary folder"]
+    fn live_pinterest_thumbnail_recovery() {
+        let id = std::env::var("PINPAPER_LIVE_PIN_ID").expect("set PINPAPER_LIVE_PIN_ID");
+        let thumbnail = std::env::var("PINPAPER_LIVE_THUMBNAIL").expect("set PINPAPER_LIVE_THUMBNAIL");
+        let source = network::resolve_pin_image(&id).unwrap();
+        assert!(source.primary_is_original, "page did not expose original: {:?}", source);
+        assert!(network::same_asset(&thumbnail, &source.primary));
+        let pin = Pin { id: id.clone(), url: source.primary,
+            original_url_exact: source.primary_is_original, fallback_url: source.fallback,
+            source_url: source.source_url, ..Default::default() };
+        let dir = std::env::temp_dir().join(format!("pinpaper-live-recovery-{id}"));
+        fs::create_dir_all(&dir).unwrap();
+        let result = download_with_guard(&dir, &pin, || true).unwrap();
+        let (width, height) = decoded_dimensions(&result.path).unwrap();
+        println!("pin={id} decoded={width}x{height} source={} path={}", result.source_url, result.path.display());
+        assert!(width > 236, "download remained a thumbnail");
+        assert!(result.source_url.contains("/originals/") || network::valid_source_url(&result.source_url));
+    }
+
+    #[test]
     fn exif_rotation_changes_dimensions_and_png_preserves_pixels() {
         let source = image::RgbImage::from_fn(8, 4, |x, y| {
             image::Rgb([(x * 20) as u8, (y * 40) as u8, 70])
@@ -410,6 +1031,62 @@ mod download_tests {
             decoded.to_rgb8()
         );
     }
+
+    #[test]
+    fn decoded_quality_prefers_the_larger_external_or_pinterest_variant() {
+        let low = image::DynamicImage::ImageRgb8(image::RgbImage::new(736, 414));
+        let high = image::DynamicImage::ImageRgb8(image::RgbImage::new(2560, 1440));
+        assert!(decoded_image_is_better(&high, &low));
+        assert!(!decoded_image_is_better(&low, &high));
+    }
+
+    #[test]
+    fn cached_dimensions_use_the_decoded_file_over_page_metadata() {
+        let dir =
+            std::env::temp_dir().join(format!("pinpaper-dimensions-{}", rand::random::<u64>()));
+        fs::create_dir_all(&dir).unwrap();
+        let pin = Pin {
+            id: "123".into(),
+            board_id: crate::browser_session::SOURCE.into(),
+            url: "https://i.pinimg.com/originals/123.jpg".into(),
+            // Simulate the overstated Pinterest metadata from the reported
+            // bug. The file on disk is the authority after download.
+            max_width: 4000,
+            max_height: 3000,
+            ..Default::default()
+        };
+        image::RgbImage::new(640, 480)
+            .save(quality_cache(&dir, &pin))
+            .unwrap();
+
+        assert_eq!(cached_dimensions(&dir, &pin), Some((640, 480)));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn source_fallback_cache_is_reused_only_during_negative_source_backoff() {
+        let dir =
+            std::env::temp_dir().join(format!("pinpaper-source-cache-{}", rand::random::<u64>()));
+        fs::create_dir_all(&dir).unwrap();
+        let pin = Pin {
+            id: "source-cache".into(),
+            board_id: crate::browser_session::SOURCE.into(),
+            url: "https://i.pinimg.com/736x/source-cache.jpg".into(),
+            source_url: Some(format!(
+                "https://wallhaven.cc/w/zpvp3g-cache-{}",
+                rand::random::<u64>()
+            )),
+            dimensions_url: Some("https://i.pinimg.com/736x/source-cache.jpg".into()),
+            ..Default::default()
+        };
+        let path = quality_cache(&dir, &pin);
+        fs::write(&path, b"fallback").unwrap();
+        assert_eq!(cached(&dir, &pin), path.with_extension("retry"));
+        network::mark_external_source_unavailable(&pin);
+        assert_eq!(cached(&dir, &pin), path);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn selection_passes_five_rejections_and_stops_at_first_usable_picture() {
         let mut visited = Vec::new();
@@ -482,6 +1159,265 @@ mod download_tests {
     }
 
     #[test]
+    fn foreground_search_checks_all_saved_candidates_when_downloads_fail() {
+        let dir =
+            std::env::temp_dir().join(format!("pinpaper-foreground-{}", rand::random::<u64>()));
+        fs::create_dir_all(&dir).unwrap();
+        let pins = (0..12)
+            .map(|index| Pin {
+                dimensions_verified: false,
+                id: index.to_string(),
+                board_id: crate::browser_session::SOURCE.into(),
+                title: format!("Pin {index}"),
+                description: String::new(),
+                url: format!("https://i.pinimg.com/236x/{index}.jpg"),
+                fallback_url: None,
+                width: 0,
+                height: 0,
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let candidates = foreground_candidates(pins, &dir, true);
+        let mut attempts = Vec::new();
+        let failure = select_foreground(
+            candidates,
+            |_| false,
+            |pin| (crate::model::image_identity(pin), pin.url.clone()),
+            |attempt, pin| attempts.push((attempt, pin.id.clone())),
+            |_, _, _| {},
+            |_| Err::<(), _>("download failed".into()),
+        )
+        .unwrap_err();
+        assert_eq!(
+            attempts,
+            (1..=12)
+                .map(|attempt| (attempt, (attempt - 1).to_string()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(failure.attempts, 12);
+        assert_eq!(failure.max_attempts, 12);
+        assert!(!failure.exhausted_budget);
+        assert_eq!(failure.candidates, 12);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn foreground_search_crosses_a_two_pin_round_tail_without_reordering_cached_history() {
+        let dir =
+            std::env::temp_dir().join(format!("pinpaper-round-tail-{}", rand::random::<u64>()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut library = crate::model::Library::default();
+        library.settings.board_ids = vec!["board".into()];
+        library.pins = (0..10)
+            .map(|index| Pin {
+                dimensions_verified: true,
+                id: index.to_string(),
+                board_id: "board".into(),
+                title: format!("Pin {index}"),
+                description: String::new(),
+                url: format!("https://i.pinimg.com/736x/{index}.jpg"),
+                fallback_url: None,
+                width: 1920,
+                height: 1080,
+                ..Default::default()
+            })
+            .collect();
+        for index in 0..8 {
+            let used = library.pins[index].clone();
+            crate::model::record_rotation(&mut library, &used);
+        }
+        library.history = (0..40).map(|index| format!("old-{index}")).collect();
+        // The current wallpaper is excluded by the normal ranking filter, so
+        // the persisted pool has two unseen pins and seven usable next-round
+        // fallbacks.
+        library.current = Some(library.pins[0].clone());
+        for pin in library.pins.iter().skip(1).take(7) {
+            fs::write(quality_cache(&dir, pin), b"cached").unwrap();
+        }
+
+        // Exercise the same persisted state shape loaded by Engine::setup.
+        let library: crate::model::Library =
+            serde_json::from_slice(&serde_json::to_vec(&library).unwrap()).unwrap();
+        let candidates = crate::model::foreground_rotation_candidates(&library);
+        failures()
+            .lock()
+            .unwrap()
+            .insert(candidates[2].url.clone(), Instant::now());
+        // This mirrors Engine::next(true): a manual click clears background
+        // cooldowns before building the foreground pool.
+        clear_temporary_unavailable(candidates.iter());
+        let candidates = foreground_candidates(candidates, &dir, true);
+        let mut attempts = Vec::new();
+        let failure = select_foreground(
+            candidates,
+            |pin| cached(&dir, pin).exists(),
+            |pin| (crate::model::image_identity(pin), pin.url.clone()),
+            |attempt, pin| attempts.push((attempt, pin.id.clone())),
+            |_, _, _| {},
+            |_| Err::<(), _>("Image download failed".into()),
+        )
+        .unwrap_err();
+
+        assert_eq!(attempts.len(), 9);
+        assert_eq!(attempts.first().map(|(_, id)| id.as_str()), Some("8"));
+        assert_eq!(attempts.last().map(|(_, id)| id.as_str()), Some("7"));
+        assert_eq!(failure.attempts, 9);
+        assert_eq!(failure.max_attempts, 9);
+        assert!(!failure.exhausted_budget);
+        assert_eq!(failure.candidates, 9);
+        failures().lock().unwrap().clear();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn persisted_rotation_cursor_moves_past_three_cached_successes_in_a_428_pin_library() {
+        let mut library = crate::model::Library::default();
+        library.settings.board_ids = vec!["board".into()];
+        library.pins = (0..428)
+            .map(|index| Pin {
+                dimensions_verified: true,
+                id: format!("{index:03}"),
+                board_id: "board".into(),
+                title: format!("Landscape pin {index}"),
+                description: String::new(),
+                url: format!("https://i.pinimg.com/736x/{index:03}.jpg"),
+                fallback_url: None,
+                width: 1920,
+                height: 1080,
+                ..Default::default()
+            })
+            .collect();
+
+        // Three previously cached images have already completed the round.
+        for index in 0..3 {
+            let pin = library.pins[index].clone();
+            crate::model::record_rotation(&mut library, &pin);
+        }
+        library.current = Some(library.pins[2].clone());
+
+        // Exercise the same persisted state shape loaded during application
+        // setup, then fail every remaining URL exactly as a foreground request
+        // would after a temporary CDN refusal.
+        let mut library: crate::model::Library =
+            serde_json::from_slice(&serde_json::to_vec(&library).unwrap()).unwrap();
+        crate::model::begin_rotation_round(&mut library);
+        let first_batch = crate::model::foreground_rotation_candidates(&library);
+        assert_eq!(first_batch.len(), 427);
+        assert_eq!(first_batch[0].id, "003");
+        let mut rejected = Vec::new();
+        let failure = select_foreground(
+            first_batch,
+            |_| false,
+            |pin| (crate::model::image_identity(pin), pin.url.clone()),
+            |_, _| {},
+            |_, pin, _| rejected.push(pin.clone()),
+            |pin| Err::<(), _>(format!("temporary download failure for {}", pin.id)),
+        )
+        .unwrap_err();
+        assert_eq!(failure.attempts, 427);
+        assert_eq!(failure.max_attempts, 427);
+        assert!(!failure.exhausted_budget);
+        assert_eq!(rejected.len(), 427);
+        assert_eq!(rejected.first().map(|pin| pin.id.as_str()), Some("003"));
+        assert_eq!(rejected.last().map(|pin| pin.id.as_str()), Some("001"));
+        for pin in rejected {
+            crate::model::record_rotation_attempt(&mut library, &pin);
+        }
+
+        // A restart sees a completed saved-picture round and starts the next
+        // round at the first eligible image instead of applying an arbitrary
+        // eight-attempt cutoff.
+        let mut library: crate::model::Library =
+            serde_json::from_slice(&serde_json::to_vec(&library).unwrap()).unwrap();
+        assert!(crate::model::begin_rotation_round(&mut library));
+        let next_batch = crate::model::foreground_rotation_candidates(&library);
+        assert_eq!(next_batch[0].id, "000");
+        let mut attempts = Vec::new();
+        let selected = select_foreground(
+            next_batch,
+            |_| false,
+            |pin| (crate::model::image_identity(pin), pin.url.clone()),
+            |_, pin| attempts.push(pin.id.clone()),
+            |_, _, _| {},
+            |pin| {
+                if pin.id == "000" {
+                    Ok(pin.id.clone())
+                } else {
+                    Err("unexpected repeat before the unattempted tail".into())
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(selected, "000");
+        assert_eq!(attempts, vec!["000"]);
+    }
+
+    #[test]
+    fn foreground_search_reports_user_cancellation_without_marking_a_failure() {
+        let mut attempts = Vec::new();
+        let failure = select_foreground(
+            0..100,
+            |_| false,
+            |pin| (pin.to_string(), pin.to_string()),
+            |attempt, pin| attempts.push((attempt, *pin)),
+            |_, _, _| panic!("cancellation must not be reported as an image failure"),
+            |_| Err::<(), _>(CHANGE_CANCELLED.into()),
+        )
+        .unwrap_err();
+
+        assert!(failure.cancelled);
+        assert_eq!(attempts, vec![(1, 0)]);
+        assert_eq!(failure.candidates, 100);
+        assert_eq!(failure.max_attempts, 100);
+        assert!(!failure.exhausted_budget);
+    }
+
+    #[test]
+    fn foreground_search_counts_successes_separately_from_attempts() {
+        let mut attempts = Vec::new();
+        let selected = select_foreground_with_target(
+            0..5,
+            2,
+            |_| false,
+            |pin| (pin.to_string(), pin.to_string()),
+            |attempt, pin| attempts.push((attempt, *pin)),
+            |_, _, _| {},
+            |pin| {
+                if pin == 0 {
+                    Err("temporary download failure".into())
+                } else {
+                    Ok(pin)
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(selected, vec![1, 2]);
+        assert_eq!(attempts, vec![(1, 0), (2, 1), (3, 2)]);
+    }
+
+    #[test]
+    fn foreground_search_reports_source_exhaustion_before_success_target() {
+        let failure = select_foreground_with_target(
+            0..3,
+            2,
+            |_| false,
+            |pin| (pin.to_string(), pin.to_string()),
+            |_, _| {},
+            |_, _, _| {},
+            |_| Err::<(), _>("download failed".into()),
+        )
+        .unwrap_err();
+
+        assert_eq!(failure.attempts, 3);
+        assert_eq!(failure.candidates, 3);
+        assert_eq!(failure.successful, 0);
+        assert_eq!(failure.target_successes, 2);
+        assert!(failure.source_exhausted);
+        assert!(!failure.exhausted_budget);
+    }
+
+    #[test]
     fn bounded_selection_deduplicates_pin_and_url_keys() {
         let mut attempts = Vec::new();
         let result = select_bounded(
@@ -545,7 +1481,7 @@ mod download_tests {
                     cache_once(path, || {
                         writes.fetch_add(1, Ordering::SeqCst);
                         fs::write(path, b"complete image").unwrap();
-                        Ok(path.clone())
+                        Ok((path.clone(), "https://i.pinimg.com/736x/cache.jpg".into()))
                     })
                     .unwrap();
                     assert_eq!(fs::read(path).unwrap(), b"complete image");
@@ -553,14 +1489,34 @@ mod download_tests {
             }
         });
         assert_eq!(writes.load(Ordering::SeqCst), 1);
+        let (_, source) = cache_once(&path, || Err("cache should already exist".into())).unwrap();
+        assert_eq!(source, "https://i.pinimg.com/736x/cache.jpg");
         let retry = dir.join("retry.jpg");
         assert!(cache_once(&retry, || Err("temporary failure".into())).is_err());
         cache_once(&retry, || {
             fs::write(&retry, b"retried").unwrap();
-            Ok(retry.clone())
+            Ok((retry.clone(), String::new()))
         })
         .unwrap();
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reset_cache_invalidates_old_generation_and_removes_ephemeral_cache() {
+        use std::sync::atomic::AtomicU64;
+        let dir = std::env::temp_dir().join(format!(
+            "pinpaper-reset-cache-test-{}",
+            rand::random::<u64>()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("wallpaper.png"), b"cached image").unwrap();
+        fs::write(dir.join("wallpaper.preview.jpg"), b"preview").unwrap();
+        let generation = AtomicU64::new(41);
+
+        reset_cache(&dir, &generation).unwrap();
+
+        assert!(!dir.exists());
+        assert_eq!(generation.load(Ordering::SeqCst), 42);
     }
 
     #[test]
@@ -575,6 +1531,7 @@ mod download_tests {
             fallback_url: None,
             width: 0,
             height: 0,
+            ..Default::default()
         };
         let unrelated = Pin {
             id: "unrelated".into(),

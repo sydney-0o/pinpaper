@@ -5,13 +5,19 @@ import {
   ArrowUpRight,
   Check,
   ChevronLeft,
+  ChevronRight,
+  Clock3,
+  EyeOff,
+  Images,
   Leaf,
   LoaderCircle,
   Pause,
   Play,
+  Plus,
   Settings2,
   SkipForward,
-  X,
+  Square,
+  Undo2,
 } from "lucide-react";
 import { resolveLanguage, translator } from "./i18n";
 type Settings = {
@@ -19,10 +25,12 @@ type Settings = {
   active_start: number;
   active_end: number;
   enabled: boolean;
+  launch_at_login: boolean;
   keywords: string;
   exclude: string;
   orientation: string;
   min_width: number;
+  display_mode: string;
   board_ids: string[];
 };
 type Pin = {
@@ -45,6 +53,11 @@ type Snapshot = {
     last_change: number;
     last_sync: number;
   };
+  total_pictures: number;
+  selected_pictures: number;
+  available_pictures: number;
+  unknown_resolution_pictures: number;
+  hidden_pictures: number;
   connected: boolean;
   browser_connected: boolean;
   browser_open: boolean;
@@ -68,10 +81,12 @@ const defaults: Settings = {
   active_start: 8,
   active_end: 23,
   enabled: false,
+  launch_at_login: false,
   keywords: "",
   exclude: "",
   orientation: "landscape",
   min_width: 1280,
+  display_mode: "fill",
   board_ids: [],
 };
 const initial: Snapshot = {
@@ -94,6 +109,11 @@ const initial: Snapshot = {
   error: null,
   preview: null,
   locale: resolveLanguage(navigator.languages),
+  total_pictures: 0,
+  selected_pictures: 0,
+  available_pictures: 0,
+  unknown_resolution_pictures: 0,
+  hidden_pictures: 0,
 };
 function initialState(): Snapshot {
   // Synthetic, development-only browser review. No real account, file or native action.
@@ -125,9 +145,19 @@ function initialState(): Snapshot {
         boards: [{ id: "browser-session", name: "Browser collection" }],
         settings: { ...defaults, board_ids: ["browser-session"] },
       },
+      total_pictures: pins.length,
+      selected_pictures: pins.length,
+      available_pictures: pins.length - 1,
+      unknown_resolution_pictures: 0,
+      hidden_pictures: 0,
     };
   }
-  return initial;
+  return import.meta.env.DEV && !isTauri()
+    ? {
+        ...initial,
+        locale: resolveLanguage([query.get("lang") || initial.locale]),
+      }
+    : initial;
 }
 export default function App() {
   const [state, setState] = useState(initialState);
@@ -137,6 +167,7 @@ export default function App() {
     [operation, setOperation] = useState(""),
     [error, setError] = useState<string | null>(null),
     [notice, setNotice] = useState("");
+  const [resetPending, setResetPending] = useState(false);
   const [step, setStep] = useState(0),
     [source, setSource] = useState<"home" | "saved">("home");
   const [search, setSearch] = useState(""),
@@ -153,6 +184,11 @@ export default function App() {
     enabled = library.settings.enabled;
   const n = (value: number) =>
     new Intl.NumberFormat(state.locale).format(value);
+  const currentIndex = current
+    ? library.pins.findIndex(
+        (pin) => pin.id === current.id && pin.board_id === current.board_id,
+      )
+    : -1;
   async function refresh() {
     if (!desktop) return state;
     if (refreshing.current) refreshAgain.current = true;
@@ -258,6 +294,7 @@ export default function App() {
   }, [error, state.error, notice]);
   function settings() {
     setDraft({ ...library.settings });
+    setStep(state.browser_open ? (library.pins.length ? 2 : 1) : 0);
     setPage("settings");
     setNotice("");
   }
@@ -268,22 +305,27 @@ export default function App() {
   const canRetrySearch =
     problem?.includes("Wallpaper search paused") ||
     problem?.includes("No suitable wallpapers");
-  const errorHint =
-    problem?.includes("403") ? t("errorForbidden") : problem === "preview"
+  const errorHint = problem?.includes("403")
+    ? t("errorForbidden")
+    : problem === "preview"
       ? t("previewOnly")
-      : problem?.includes("Wallpaper search paused") ||
-          problem?.includes("No suitable wallpapers")
-        ? t("retrySearch")
-      : problem?.includes("No Pinterest page") ||
-          problem?.includes("sign-in") ||
-          problem?.includes("signing in")
-        ? t("errorNoPage")
-        : problem?.includes("No image pins") ||
-            problem?.includes("did not answer")
-          ? t("errorNoPins")
-          : problem?.includes("No matching") || problem?.includes("filters")
-            ? t("errorFilters")
-            : t("retryHelp");
+      : problem?.includes("Reset completed except image cache cleanup failed")
+        ? t("errorResetCache")
+        : problem?.includes("Wallpaper search paused") ||
+            problem?.includes("No suitable wallpapers")
+          ? t("retrySearch")
+          : problem?.includes("Wallpaper change stopped")
+            ? t("changeStopped")
+          : problem?.includes("No Pinterest page") ||
+              problem?.includes("sign-in") ||
+              problem?.includes("signing in")
+            ? t("errorNoPage")
+            : problem?.includes("No image pins") ||
+                problem?.includes("did not answer")
+              ? t("errorNoPins")
+              : problem?.includes("No matching") || problem?.includes("filters")
+                ? t("errorFilters")
+                : t("retryHelp");
   const hasSelection =
     library.settings.board_ids.length > 0 && library.pins.length > 0;
   const changeStatus = state.change_status;
@@ -295,7 +337,7 @@ export default function App() {
         })
       : changeStatus?.phase === "applying"
         ? t("searchingApply")
-        : changeStatus?.phase === "searching"
+      : changeStatus?.phase === "searching"
           ? t("searchingFirst", {
               attempt: n(changeStatus.attempt),
               max: n(changeStatus.max_attempts),
@@ -343,7 +385,9 @@ export default function App() {
       {page === "home" ? (
         <>
           <div className="section-heading">
-            <span className="eyebrow">{t("current")}</span>
+            <span className="eyebrow">
+              {t(current ? "current" : "welcomeLabel")}
+            </span>
             <button className="secondary settings-button" onClick={settings}>
               <Settings2 size={17} />
               {t("settings")}
@@ -373,50 +417,73 @@ export default function App() {
           <div className="caption">
             <h1>{current?.title || t("welcome")}</h1>
             {current && (
-              <span className="dimensions">
-                {current.width} × {current.height}
-              </span>
+              <div className="picture-meta">
+                {currentIndex >= 0 && (
+                  <span className="picture-position" title={t("picturePositionHint")}>
+                    {t("picturePosition", {
+                      index: n(currentIndex + 1),
+                      total: n(library.pins.length),
+                    })}
+                  </span>
+                )}
+                {current.width > 0 && current.height > 0 && (
+                  <span className="dimensions">
+                    {current.width} × {current.height}
+                  </span>
+                )}
+              </div>
             )}
           </div>
           {!library.pins.length && <p className="intro">{t("getStarted")}</p>}
-          <div className="actions">
-            <button
-              className="primary"
-              disabled={blocked || !hasSelection}
-              aria-busy={
-                state.changing ||
-                (busy && ["next_wallpaper", "feedback"].includes(operation))
-              }
-              onClick={() => action("next_wallpaper")}
-            >
-              {state.changing ||
-              (busy && ["next_wallpaper", "feedback"].includes(operation)) ? (
-                <>
-                  <LoaderCircle className="spin" size={19} />
-                  <span role="status">{changeLabel}</span>
-                </>
-              ) : (
-                <>
-                  <SkipForward size={17} />
-                  {t("changeWallpaper")}
-                </>
-              )}
+          {!library.pins.length ? (
+            <button className="primary full" onClick={settings}>
+              <Plus size={18} />
+              {t("addPictures")}
             </button>
-            <button
-              className="secondary"
-              disabled={blocked || !current}
-              title={t("hideHint")}
-              onClick={() => action("feedback", { value: -1 })}
-            >
-              <X size={18} />
-              {t("hide")}
-            </button>
-          </div>
-          {!hasSelection && <p className="hint">{t("selectedEmpty")}</p>}
+          ) : (
+            <div className="actions">
+              <button
+                className="primary"
+                disabled={blocked || !hasSelection}
+                aria-busy={
+                  state.changing ||
+                  (busy && ["next_wallpaper", "feedback"].includes(operation))
+                }
+                onClick={() => action("next_wallpaper")}
+              >
+                {state.changing ||
+                (busy && ["next_wallpaper", "feedback"].includes(operation)) ? (
+                  <>
+                    <LoaderCircle className="spin" size={19} />
+                    <span role="status">{changeLabel}</span>
+                  </>
+                ) : (
+                  <>
+                    <SkipForward size={17} />
+                    {t("changeWallpaper")}
+                  </>
+                )}
+              </button>
+              <button
+                className="secondary"
+                disabled={blocked || !current}
+                title={t("hideHint")}
+                onClick={() => action("feedback", { value: -1 })}
+              >
+                <EyeOff size={18} />
+                {t("hide")}
+              </button>
+            </div>
+          )}
+          {!!library.pins.length && !hasSelection && (
+            <p className="hint">{t("selectedEmpty")}</p>
+          )}
           <section className="schedule-card">
             <div className="row">
               <div className="row-label">
-                <span className={"status-dot " + (enabled ? "active" : "")} />
+                <span className={"schedule-icon " + (enabled ? "active" : "")}>
+                  <Clock3 size={19} />
+                </span>
                 <div>
                   <strong>{t(enabled ? "autoOn" : "autoOff")}</strong>
                   <small>
@@ -453,9 +520,10 @@ export default function App() {
           </section>
           <button className="library-row" onClick={() => setPage("collection")}>
             <span>
+              <Images size={19} />
               {t("browsePictures", { count: n(library.pins.length) })}
             </span>
-            <ArrowUpRight size={18} />
+            <ChevronRight size={18} />
           </button>
         </>
       ) : page === "collection" ? (
@@ -515,33 +583,39 @@ export default function App() {
                   className="picture-item"
                   key={`${pin.board_id}:${pin.id}`}
                 >
-                  <h2>{pin.title || t("untitled")}</h2>
-                  <p className="hint">
-                    {sourceName(pin.board_id)}
-                    {hidden
-                      ? ` · ${t("hidden")}`
-                      : !library.settings.board_ids.includes(pin.board_id)
-                        ? ` · ${t("notSelected")}`
-                        : ""}
-                    {current?.id === pin.id ? ` · ${t("current")}` : ""}
-                  </p>
+                  <div className="picture-item-head">
+                    <div className="picture-item-meta">
+                      <h2>{pin.title || t("untitled")}</h2>
+                      <p className="hint">
+                        {sourceName(pin.board_id)}
+                        {hidden
+                          ? ` · ${t("hidden")}`
+                          : !library.settings.board_ids.includes(pin.board_id)
+                            ? ` · ${t("notSelected")}`
+                            : ""}
+                        {current?.id === pin.id ? ` · ${t("current")}` : ""}
+                      </p>
+                    </div>
+                    <button
+                      className="secondary picture-item-action"
+                      disabled={blocked}
+                      title={t(hidden ? "useAgain" : "hideFromWallpapers")}
+                      aria-label={t(hidden ? "useAgain" : "hideFromWallpapers")}
+                      onClick={() =>
+                        action("set_pin_hidden", {
+                          pinId: pin.id,
+                          hidden: !hidden,
+                        })
+                      }
+                    >
+                      {hidden ? <Undo2 size={17} /> : <EyeOff size={17} />}
+                    </button>
+                  </div>
                   <button
                     className="picture-link"
                     onClick={() => action("open_pin", { pinId: pin.id })}
                   >
-                    pinterest.com/pin/{pin.id}/ <ArrowUpRight size={16} />
-                  </button>
-                  <button
-                    className="secondary"
-                    disabled={blocked}
-                    onClick={() =>
-                      action("set_pin_hidden", {
-                        pinId: pin.id,
-                        hidden: !hidden,
-                      })
-                    }
-                  >
-                    {t(hidden ? "useAgain" : "hideFromWallpapers")}
+                    {t("openOriginal")} <ArrowUpRight size={16} />
                   </button>
                 </article>
               );
@@ -552,22 +626,24 @@ export default function App() {
               {t(library.pins.length ? "noMatches" : "noPictures")}
             </p>
           )}
-          <div className="pagination">
-            <button
-              className="secondary"
-              disabled={currentPage === 0}
-              onClick={() => setCollectionPage(currentPage - 1)}
-            >
-              {t("previous")}
-            </button>
-            <button
-              className="secondary"
-              disabled={currentPage >= pages - 1}
-              onClick={() => setCollectionPage(currentPage + 1)}
-            >
-              {t("nextPage")}
-            </button>
-          </div>
+          {pages > 1 && (
+            <div className="pagination">
+              <button
+                className="secondary"
+                disabled={currentPage === 0}
+                onClick={() => setCollectionPage(currentPage - 1)}
+              >
+                {t("previous")}
+              </button>
+              <button
+                className="secondary"
+                disabled={currentPage >= pages - 1}
+                onClick={() => setCollectionPage(currentPage + 1)}
+              >
+                {t("nextPage")}
+              </button>
+            </div>
+          )}
           <button className="primary full" onClick={settings}>
             {t("chooseAdd")}
           </button>
@@ -596,7 +672,10 @@ export default function App() {
                     aria-pressed={step === index}
                     onClick={() => setStep(index)}
                   >
-                    {t(key)}
+                    <span className="step-number" aria-hidden="true">
+                      {index + 1}
+                    </span>
+                    <span>{t(key)}</span>
                   </button>
                 ),
               )}
@@ -721,6 +800,18 @@ export default function App() {
               {t("selectionCount", { count: n(selected) })}
               {!draft.board_ids.length ? ` ${t("noCollections")}` : ""}
             </p>
+            <details className="collection-details">
+              <summary>{t("collectionDetails")}</summary>
+              <p role="status" className="hint">
+                {t("pictureCounts", {
+                  total: n(state.total_pictures),
+                  selected: n(state.selected_pictures),
+                  available: n(state.available_pictures),
+                  unknown: n(state.unknown_resolution_pictures),
+                  hidden: n(state.hidden_pictures),
+                })}
+              </p>
+            </details>
             <div className="collection-actions">
               <button
                 className="primary full"
@@ -746,6 +837,31 @@ export default function App() {
                 {t("browseSaved")}
               </button>
             </div>
+            <button
+              className="secondary full use-all"
+              disabled={blocked || !library.pins.length}
+              onClick={() => {
+                const boardIds = [
+                  ...new Set(
+                    library.pins
+                      .filter((pin) => library.feedback[pin.id] !== -1)
+                      .map((pin) => pin.board_id),
+                  ),
+                ];
+                setDraft((d) => ({
+                  ...d,
+                  board_ids: boardIds,
+                  keywords: "",
+                  exclude: "",
+                  orientation: "any",
+                  min_width: 0,
+                }));
+                setNotice(t("allPicturesPrepared"));
+              }}
+            >
+              {t("useAllPictures")}
+            </button>
+            <p className="field-help">{t("useAllPicturesHint")}</p>
           </section>
           <section className="form-section">
             <h2>{t("preferences")}</h2>
@@ -840,6 +956,18 @@ export default function App() {
               {t("autoEnable")}
             </label>
           </section>
+          <section className="form-section">
+            <h2>{t("startupTitle")}</h2>
+            <label className="board">
+              <input
+                type="checkbox"
+                checked={draft.launch_at_login}
+                onChange={(e) => update("launch_at_login", e.target.checked)}
+              />
+              {t("launchAtLogin")}
+            </label>
+            <p className="field-help">{t("launchAtLoginHint")}</p>
+          </section>
           <details className="account-section">
             <summary>{t("account")}</summary>
             <p className="hint">{t("accountHint")}</p>
@@ -855,18 +983,38 @@ export default function App() {
             <button
               className="text-button danger"
               disabled={blocked}
-              onClick={async () => {
-                if (
-                  window.confirm(t("resetConfirm")) &&
-                  (await action("disconnect"))
-                ) {
-                  setDraft(defaults);
-                  setStep(0);
-                }
-              }}
+              onClick={() => setResetPending(true)}
             >
               {t("reset")}
             </button>
+            {resetPending && (
+              <div className="reset-confirm" role="alert">
+                <p>{t("resetConfirm")}</p>
+                <div className="reset-confirm-actions">
+                  <button
+                    className="secondary"
+                    disabled={blocked}
+                    onClick={() => setResetPending(false)}
+                  >
+                    {t("cancelReset")}
+                  </button>
+                  <button
+                    className="text-button danger"
+                    disabled={blocked}
+                    onClick={async () => {
+                      setResetPending(false);
+                      if (await action("disconnect")) {
+                        setDraft({ ...defaults });
+                        setStep(0);
+                        setNotice(t("resetDone"));
+                      }
+                    }}
+                  >
+                    {t("confirmReset")}
+                  </button>
+                </div>
+              </div>
+            )}
           </details>
           <div className="save-bar">
             <button
@@ -885,19 +1033,34 @@ export default function App() {
       )}
       {blocked && (
         <div className="working" role="status">
-          <LoaderCircle className="spin" size={15} />
-          {t(
-            operation === "browser_import"
-              ? "adding"
-              : operation === "next_wallpaper"
-                ? "changing"
-                : "working",
+          <span className="working-label">
+            <LoaderCircle className="spin" size={15} />
+            {t(
+              operation === "browser_import"
+                ? "adding"
+                : operation === "next_wallpaper"
+                  ? "changing"
+                  : operation === "stop_wallpaper_change"
+                    ? "stopping"
+                    : "working",
+            )}
+          </span>
+          {state.changing && (
+            <button
+              className="secondary stop-change"
+              disabled={busy && operation === "stop_wallpaper_change"}
+              onClick={() => action("stop_wallpaper_change")}
+            >
+              <Square size={14} />
+              {t("stopChange")}
+            </button>
           )}
         </div>
       )}
       <footer className="help-footer">
-        <p>{t("retryHelp")}</p>
-        {page !== "settings" && (
+        <details>
+          <summary>{t("helpTitle")}</summary>
+          <p>{t("retryHelp")}</p>
           <button
             className="text-button"
             onClick={() => {
@@ -907,7 +1070,7 @@ export default function App() {
           >
             {t("retry")}
           </button>
-        )}
+        </details>
       </footer>
     </main>
   );

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stop-wallpaper-change"
+description = "Enables the stop_wallpaper_change command without any pre-configured scope."
+commands.allow = ["stop_wallpaper_change"]
+
+[[permission]]
+identifier = "deny-stop-wallpaper-change"
+description = "Denies the stop_wallpaper_change command without any pre-configured scope."
+commands.deny = ["stop_wallpaper_change"]

@@ -1,13 +1,13 @@
 {
   "identifier": "main",
   "description": "Local Pinpaper controls only",
-  "windows": [
-    "main"
-  ],
+  "windows": ["main"],
   "permissions": [
     "allow-snapshot",
     "allow-save-settings",
+    "allow-autostart-status",
     "allow-next-wallpaper",
+    "allow-stop-wallpaper-change",
     "allow-feedback",
     "allow-disconnect",
     "allow-open-pin",

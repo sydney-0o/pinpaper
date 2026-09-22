@@ -3,7 +3,9 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "snapshot",
             "save_settings",
+            "autostart_status",
             "next_wallpaper",
+            "stop_wallpaper_change",
             "feedback",
             "disconnect",
             "open_pin",

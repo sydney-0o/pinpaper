@@ -234,16 +234,34 @@ pub fn capture(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, String> {
     Ok(w)
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 pub struct PagePin {
     id: String,
     title: String,
     description: String,
     url: String,
     #[serde(default)]
+    source_url: Option<String>,
+    #[serde(default)]
     fallback_url: Option<String>,
+    #[serde(default)]
+    original_url_exact: bool,
+    /// Kept for compatibility with older capture scripts. New imports use the
+    /// explicit thumbnail and maximum-source fields below.
+    #[serde(default)]
     width: u32,
+    #[serde(default)]
     height: u32,
+    #[serde(default)]
+    thumbnail_width: u32,
+    #[serde(default)]
+    thumbnail_height: u32,
+    #[serde(default)]
+    max_width: u32,
+    #[serde(default)]
+    max_height: u32,
+    #[serde(default)]
+    max_dimensions_url: Option<String>,
 }
 #[derive(Deserialize)]
 pub struct PageReport {
@@ -336,14 +354,52 @@ fn normalize_report(report: PageReport) -> Result<Vec<Pin>, String> {
                 && network::valid_image_url(&p.url)
                 && p.width <= 16384
                 && p.height <= 16384
+                && p.thumbnail_width <= 16384
+                && p.thumbnail_height <= 16384
+                && p.max_width <= 16384
+                && p.max_height <= 16384
                 && seen.insert(p.id.clone())
         })
         .map(|p| {
+            let source_url = p
+                .source_url
+                .as_deref()
+                .filter(|url| network::valid_source_url(url))
+                .map(str::to_owned);
             let fallback_url = p
                 .fallback_url
                 .as_deref()
-                .filter(|url| *url != p.url.as_str() && network::valid_image_url(url))
+                .filter(|url| {
+                    *url != p.url.as_str()
+                        && network::valid_image_url(url)
+                        && network::same_asset(url, &p.url)
+                })
                 .map(str::to_owned);
+            // Only dimensions attached to the exact original URL are safe to
+            // use as a pre-download maximum. A guessed URL or a thumbnail's
+            // natural size must remain unknown.
+            let max_url = p
+                .max_dimensions_url
+                .as_deref()
+                .filter(|url| network::valid_image_url(url))
+                .filter(|url| network::asset_identity(url) == network::asset_identity(&p.url))
+                .map(str::to_owned);
+            let has_max = max_url.is_some() && p.max_width > 0 && p.max_height > 0;
+            let legacy_thumbnail = !has_max;
+            let thumbnail_width = if p.thumbnail_width > 0 && p.thumbnail_height > 0 {
+                p.thumbnail_width
+            } else if legacy_thumbnail && p.width > 0 && p.height > 0 {
+                p.width
+            } else {
+                0
+            };
+            let thumbnail_height = if p.thumbnail_width > 0 && p.thumbnail_height > 0 {
+                p.thumbnail_height
+            } else if legacy_thumbnail && p.width > 0 && p.height > 0 {
+                p.height
+            } else {
+                0
+            };
             Pin {
                 dimensions_verified: false,
                 id: p.id,
@@ -355,17 +411,27 @@ fn normalize_report(report: PageReport) -> Result<Vec<Pin>, String> {
                 },
                 description: p.description.chars().take(2000).collect(),
                 url: p.url,
+                source_url,
                 fallback_url,
-                width: if p.width > 0 && p.height > 0 {
-                    p.width
+                original_url_exact: p.original_url_exact,
+                width: 0,
+                height: 0,
+                thumbnail_width,
+                thumbnail_height,
+                max_width: if has_max { p.max_width } else { 0 },
+                max_height: if has_max { p.max_height } else { 0 },
+                max_dimensions_source: if has_max {
+                    crate::model::DimensionSource::PinterestOriginal
                 } else {
-                    0
+                    crate::model::DimensionSource::Unknown
                 },
-                height: if p.width > 0 && p.height > 0 {
-                    p.height
+                max_dimensions_url: has_max.then_some(max_url).flatten(),
+                dimensions_source: if thumbnail_width > 0 && thumbnail_height > 0 {
+                    crate::model::DimensionSource::Thumbnail
                 } else {
-                    0
+                    crate::model::DimensionSource::Unknown
                 },
+                dimensions_url: None,
             }
         })
         .collect();
@@ -473,6 +539,41 @@ mod tests {
         assert!(normalize_report(r).is_err());
         assert_eq!(normalize_report(report()).unwrap()[0].board_id, SOURCE);
     }
+
+    #[test]
+    fn normalize_keeps_original_metadata_and_never_promotes_thumbnail_size() {
+        let mut r = report();
+        r.pins[0].url = "https://i.pinimg.com/originals/a.jpg".into();
+        r.pins[0].width = 736;
+        r.pins[0].height = 1104;
+        r.pins[0].thumbnail_width = 736;
+        r.pins[0].thumbnail_height = 1104;
+        r.pins[0].max_width = 2400;
+        r.pins[0].max_height = 3600;
+        r.pins[0].max_dimensions_url = Some("https://i.pinimg.com/originals/a.jpg".into());
+        let pin = normalize_report(r).unwrap().remove(0);
+        assert_eq!((pin.width, pin.height), (0, 0));
+        assert_eq!((pin.thumbnail_width, pin.thumbnail_height), (736, 1104));
+        assert_eq!((pin.max_width, pin.max_height), (2400, 3600));
+        assert_eq!(
+            pin.max_dimensions_source,
+            crate::model::DimensionSource::PinterestOriginal
+        );
+
+        let mut mismatched = report();
+        mismatched.pins[0].max_width = 4000;
+        mismatched.pins[0].max_height = 2000;
+        mismatched.pins[0].max_dimensions_url =
+            Some("https://i.pinimg.com/originals/other.jpg".into());
+        mismatched.pins[0].fallback_url = Some("https://i.pinimg.com/736x/other.jpg".into());
+        let pin = normalize_report(mismatched).unwrap().remove(0);
+        assert_eq!(pin.fallback_url, None);
+        assert_eq!((pin.max_width, pin.max_height), (0, 0));
+        assert_eq!(
+            pin.max_dimensions_source,
+            crate::model::DimensionSource::Unknown
+        );
+    }
     #[test]
     fn bridge_rejects_unsolicited_and_wrong_nonce() {
         let b = ImportBridge::default();
@@ -513,6 +614,7 @@ mod bridge_tests {
                 fallback_url: None,
                 width: 0,
                 height: 0,
+                ..Default::default()
             }],
         };
         assert!(b.receive("pinterest-verification-other", report()).is_err());

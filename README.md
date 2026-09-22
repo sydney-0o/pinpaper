@@ -1,105 +1,152 @@
 # Pinpaper
 
-A small Pinterest wallpaper companion built with Tauri 2, Rust, React and TypeScript. Closing the main window keeps rotation running in the tray.
+<div align="center">
 
-## Use
+<img src="assets/leaf.svg" alt="" width="56">
 
-Settings presents three steps, one at a time:
+**Your saved inspiration, turned into a calm desktop rotation.**
 
-1. **Sign in:** open Pinterest and complete login and any verification.
-2. **Load pictures:** for recommendations, open Home and scroll down until pictures appear. Scroll further to load more. For saved pins, open your profile → Saved → a board, then scroll through the individual pins (board covers alone are not enough). Leave the Pinterest window open and return to Pinpaper.
-3. **Add pictures:** import the loaded pictures and check the collection count. Return to the main screen and choose Change wallpaper.
+Pinpaper is a small, local-first desktop app for changing your wallpaper from pictures you choose on Pinterest. Pick a board or your home feed, set a schedule, and let the app bring a little variety to your desktop without keeping a browser tab open.
 
-Adding pictures immediately saves the import. Apply selection and Save settings are only needed after changing those controls; a deliberately disabled collection stays disabled.
+[Download the latest release](../../releases) · [Report a problem](../../issues)
 
-In **Pictures to use**, select collections and apply the selection. Browse pictures opens a searchable, paginated list with Pinterest links. Hide excludes a picture locally; hidden pictures can be restored. Nothing is liked, deleted or changed on Pinterest. Like was removed because it did not send a Pinterest like.
+</div>
 
-Choose picture filters and a schedule, then save settings. Preferred words influence local ranking; excluded words, orientation, minimum width and collection selection filter candidates. Ranking uses titles/descriptions, not image recognition. Start/Pause controls automatic changes.
+<p align="center">
+  <img src="docs/screenshots/home-rotation.png" alt="Pinpaper changing a wallpaper" width="220">
+  <img src="docs/screenshots/home-collection.png" alt="Pinpaper with a saved picture collection" width="260">
+  <img src="docs/screenshots/home-roses.png" alt="Pinpaper showing a wallpaper and automatic rotation" width="260">
+  <img src="docs/screenshots/home-flowers.png" alt="Pinpaper with a light floral wallpaper" width="240">
+</p>
 
-The interface follows the system language: English, Russian, Spanish, simplified Chinese or Hindi. Unsupported languages use English. Restart after changing the system language. Account actions are separated from picture selection. If something fails, use the footer to repeat the steps; error details remain available separately.
+## What Pinpaper does
 
-## Pinterest connection and limits
+Pinpaper keeps a local collection of pictures imported from the Pinterest page you are already viewing. It can then:
 
-No developer account, app secret, OAuth/API setup or credential-store access is required. The official API path has been removed. This is a manual import from the Pinterest page you open, not an official recommendation API or a background crawler.
+- change the wallpaper manually or on a schedule;
+- filter by orientation, minimum width, words and collections;
+- keep running in the menu bar or system tray when the main window is closed;
+- open the original pin, hide a picture locally, and restore it later;
+- start with your computer when you enable **Launch Pinpaper when I sign in** in Settings.
 
-The private Pinterest window keeps authentication only while open. Closing it requires signing in again; imported pictures and settings remain. Sign out closes Pinterest without clearing the collection. Reset removes local Pinpaper data. Legacy credentials from older versions are ignored, not read or deleted.
+The app is intentionally simple: it is a desktop companion for your own saved inspiration, not a Pinterest client or a replacement for Pinterest.
 
-Each import captures up to 200 loaded image pins, retaining up to 1,000. Repeat the steps to add more. Videos are skipped. Pinterest page changes, verification and webview restrictions can affect login/import. Regional subdomains of pinterest.com are accepted consistently by navigation, capture and reporting; import stays bound to the same selected window. This addresses a mismatch behind “No Pinterest page found”, but real-account acceptance of this update remains necessary.
+## Download and install
 
-Only app-owned Pinterest windows receive the restricted report permission. Reports are nonce-bound and time-limited; image URLs and dimensions are validated. Password fields are never read. Verification popups preserve their opener configuration; at most four are allowed.
+Use the file for your operating system from [Releases](../../releases). Release files are produced by GitHub Actions from this repository.
 
-## Performance and storage
+### macOS — DMG
 
-The interface refreshes on changes and focus instead of polling every five seconds. Preview decoding runs off the UI thread and is cached until the wallpaper changes. Collection browsing uses 24 link rows per page without automatically downloading thumbnails. These changes remove repeated image work associated with freezing; live CPU profiling of the user's running instance was not performed.
+1. Download the file ending in `.dmg`.
+2. Open it and drag **Pinpaper** to **Applications**.
+3. Open Pinpaper from Applications. If macOS shows a first-run warning for an unsigned build, control-click the app, choose **Open**, and confirm.
 
-A single event-driven worker prepares up to two upcoming candidates in the background after startup, imports, settings or wallpaper changes. Rapid requests are coalesced and candidates re-ranked between downloads; prefetch never changes history or applies a wallpaper. Foreground and background share one writer per URL, and completed files are reused. Background errors stay quiet with a five-minute retry cooldown; manual changes can retry immediately. There is no prefetch polling or unbounded download queue. The Change wallpaper button shows a spinner while a foreground change runs.
+Pinpaper supports macOS 11 and newer. Signed and notarized distribution can be added by a maintainer with an Apple Developer certificate; the public workflow currently builds an unsigned DMG.
 
-Images download on demand or by bounded prefetch over HTTPS from pinimg.com, with redirects refused, a 25 MiB download limit and a persistent disk image cache. Decoding limits dimensions to 16,384 pixels per axis and allocation to 256 MiB. Metadata, preferences, hidden flags and recent history live in library.json under Tauri's app-data directory for app.pinpaper.desktop. This metadata is not encrypted. On macOS the usual locations are ~/Library/Application Support/app.pinpaper.desktop and ~/Library/Caches/app.pinpaper.desktop.
+### Windows — portable EXE
 
-The scheduler checks every 15 seconds. Active hours use local time, support overnight ranges and treat equal endpoints as all day. Failed automatic changes wait five minutes before retrying. After sleep, at most one overdue change runs. Manual changes ignore active hours. Launch at login is not implemented. Only explicit imports add new pins.
+1. Download the file ending in `_x64-portable.exe`.
+2. Put it in any folder where you want to keep it.
+3. Double-click it. There is no installer and no system-wide installation step.
 
-## Platforms
+Windows 10 and 11 normally include the WebView2 runtime. If Windows reports that WebView2 is missing, install the current **Microsoft Edge WebView2 Runtime** once and start Pinpaper again.
 
-| Platform | Adapter and limits |
-| --- | --- |
-| macOS | Native NSWorkspace on connected screens; no System Events Automation requirement. On each Space switch, the current cached wallpaper is reapplied to connected screens. Inactive Spaces update when visited while Pinpaper runs; enable macOS “Show on all Spaces” for system-wide mirroring. |
-| Windows | SystemParametersInfoW; one wallpaper using existing OS fit behavior. |
-| Linux GNOME / Unity / Budgie | gsettings light and dark wallpaper URIs; matching schema required. |
-| Linux Cinnamon / MATE | Desktop-specific gsettings keys. |
-| KDE / Xfce / wlroots-only desktops | Not supported yet. |
+The public build is not code-signed, so SmartScreen may show a warning on first launch. Check that the file came from this repository's Releases page before choosing **More info → Run anyway**.
 
-The tray uses a leaf: a template icon on macOS and a green icon elsewhere.
+### Linux — AppImage or DEB
 
-## Run and build
+**AppImage (portable):** download the file ending in `.AppImage`, make it executable in the file manager's Properties dialog, then double-click it. You can keep it in any folder. From a terminal, the equivalent is:
 
-Install Node.js 22+, stable Rust and the platform prerequisites for Tauri 2: Xcode Command Line Tools on macOS; Visual Studio C++ Build Tools, Windows SDK and WebView2 on Windows; WebKitGTK 4.1, GTK and AppIndicator development libraries on Linux. GNOME may need an AppIndicator extension.
+```sh
+chmod +x Pinpaper_*_linux.AppImage
+./Pinpaper_*_linux.AppImage
+```
+
+**Debian/Ubuntu:** download the `.deb` file and open it with the system software installer. The AppImage is the better choice when you want a self-contained, movable copy.
+
+The implemented desktop integrations are GNOME, Unity, Budgie, Cinnamon and MATE. KDE, Xfce and wlroots-only desktops are not supported by the wallpaper adapter yet. On a minimal Linux installation, the desktop may also need its WebKitGTK and AppIndicator runtime packages.
+
+## First launch
+
+1. Open **Settings** and choose **Open Pinterest**.
+2. Sign in in the private Pinterest window that Pinpaper opens. Pinpaper does not ask you to paste a password into the app.
+3. Open Home, your profile, or **Saved → a board**. Scroll until the pictures you want have loaded.
+4. Return to Pinpaper and choose **Add pictures**. Repeat after scrolling to import another group.
+5. Select the collections to use, choose **Save settings**, and press **Change wallpaper**.
+
+The default rotation prefers landscape pictures at least 1,280 pixels wide. You can change that in Settings. Set an interval and active hours under **Automatic changes**, then enable **Change my wallpaper automatically**. To launch Pinpaper when you sign in, enable **Launch Pinpaper when I sign in** in the separate startup section and save the settings.
+
+Closing the main window leaves Pinpaper working in the menu bar or system tray. Choose **Quit Pinpaper** from the tray menu to stop it completely. The startup checkbox can be turned off in Settings at any time; it removes the matching macOS LaunchAgent, Windows per-user startup entry, or Linux autostart `.desktop` file.
+
+## Privacy, Pinterest and source images
+
+Pinpaper respects Pinterest and is not affiliated with, sponsored by or endorsed by Pinterest. Pinterest is a trademark of Pinterest, Inc.
+
+This project does **not** use or exploit the Pinterest API. It does not require a developer account, app secret, OAuth setup or Pinterest API credentials. Import is deliberately tied to the Pinterest page and private window that you open yourself. Password fields are never read, and the private window's session is not stored after it is closed.
+
+Imported metadata, preferences and the local image cache stay on your computer. Opening a pin or hiding/restoring a picture does not change anything on Pinterest. Pinpaper may use a public outbound source recorded on a pin when it can verify that it is the same picture; it never invents a source URL or sends your Pinterest account cookie to that site. Images that cannot be verified safely remain on the observed Pinterest copy.
+
+Pinterest pages can change, require verification, or expose only a limited group of loaded pins. Videos are skipped, an import captures up to 200 image pins at a time, and the local collection keeps up to 1,000 pins. Repeat the import after loading another group when needed.
+
+## Release files and automatic startup
+
+Every tagged release is built on its target operating system by [`.github/workflows/release.yml`](.github/workflows/release.yml):
+
+| Platform | Release file                          | What it is                            |
+| -------- | ------------------------------------- | ------------------------------------- |
+| macOS    | `Pinpaper_<version>_macOS.dmg`        | Drag-to-Applications disk image       |
+| Windows  | `Pinpaper_<version>_x64-portable.exe` | Portable x64 executable; no installer |
+| Linux    | `Pinpaper_<version>_linux.AppImage`   | Portable desktop bundle               |
+| Linux    | `Pinpaper_<version>_linux.deb`        | Debian/Ubuntu package                 |
+
+The **Launch Pinpaper when I sign in** option is implemented locally for all three platforms:
+
+- macOS writes a per-user `~/Library/LaunchAgents/app.pinpaper.desktop.plist`;
+- Windows writes a per-user `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value;
+- Linux writes `~/.config/autostart/app.pinpaper.desktop`.
+
+It is opt-in, requires no administrator password, and is removed when the checkbox is cleared or local data is reset.
+
+## Build from source
+
+This is a Tauri 2 desktop application with a React/TypeScript interface and a Rust core. For development, install:
+
+- Node.js 22 or newer;
+- stable Rust;
+- macOS: Xcode Command Line Tools;
+- Windows: Visual Studio C++ Build Tools, Windows SDK and WebView2;
+- Linux: WebKitGTK 4.1, GTK, AppIndicator, `libxdo`, OpenSSL and the usual build tools.
+
+Then run:
 
 ```sh
 npm ci
 npm run tauri -- dev
 ```
 
-For the optional project-local Rust installation on this development machine:
-
-```sh
-export RUSTUP_HOME="$PWD/work/toolchain/rustup"
-export CARGO_HOME="$PWD/work/toolchain/cargo"
-export PATH="$CARGO_HOME/bin:$PATH"
-```
+Useful local checks are:
 
 ```sh
 npm test
+npm run build
 cargo test --locked --manifest-path src-tauri/Cargo.toml
+```
+
+To build a bundle locally, build on the target OS so the native desktop adapter and bundle format match the machine:
+
+```sh
+# macOS
+npm run tauri -- build --bundles dmg
+
+# Linux
+npm run tauri -- build --bundles appimage,deb
+
+# Windows portable executable
 npm run tauri -- build --no-bundle
 ```
 
-Omit --no-bundle to generate installers/bundles under src-tauri/target/release/bundle. Build on each target OS. Distribution signing/notarization must be configured separately. The no-bundle build leaves existing app bundles untouched.
+The Windows executable is at `src-tauri/target/release/pinpaper.exe`. The macOS and Linux bundles are under `src-tauri/target/release/bundle/`. Signing, notarization and Windows code signing are intentionally separate from the public workflow.
 
-npm run dev starts an interface-only browser preview. Development-only ?review=connected&lang=ru supplies synthetic pictures for layout review; desktop actions are unavailable there.
+## License
 
-## Validation
-
-The current macOS release build and TypeScript/Vite build passed. Rust: 22 tests passed, one optional benchmark ignored. Node: seven tests passed, covering extraction, regional origins, all translation keys/placeholders and language fallback. A separately run synthetic preview benchmark measured approximately 57 ms for an initial 3840×2160 decode and 10 ms total for 1,000 cached reads. These are synthetic measurements, not live application profiling.
-
-The running user instance was not closed, replaced or driven. Earlier browser layout checks covered 380×560 and 460×760; the final translated layout still needs full visual acceptance. The three-OS workflow in .github/workflows/build.yml is prepared but has not run remotely. Windows/Linux compilation and desktop behavior have not been verified here.
-
-Manual acceptance should cover login and verification, scrolling Home and saved boards, repeated imports, source selection, hiding/restoring pictures, narrow-window layout in each language, sign-out/relogin, scheduling across sleep and active hours, tray actions and connected displays.
-
-## Source map
-
-- src/: interface, translations and styles.
-- src-tauri/src/main.rs: lifecycle, commands, scheduler and persistence.
-- browser_session.rs and capture_page.js: private browser and bounded imports.
-- model.rs: settings and local ranking.
-- preview.rs: cached preview generation.
-- wallpaper.rs: bounded downloads and platform adapters.
-- language.rs: system language and native labels.
-- assets/leaf.svg and scripts/render-tray.py: tray artwork and reproducible rendering (Pillow).
-
-Downloaded images, including pictures rejected by current size filters, remain on disk until local data is reset. There is no automatic cache eviction. Change wallpaper checks ready cached candidates first, then permits at most one new image per click. A failed new candidate ends the attempt rather than downloading the collection. Successful changes wake the bounded two-candidate background worker; failed changes do not trigger extra prefetch. OS wallpaper-setting errors still stop immediately.
-
-Image quality: downloads request the original Pinterest size path first, including previously imported thumbnails. Only HTTP 403/404/410 falls back to the supplied source. Unverified metadata dimensions do not exclude originals. EXIF rotation is applied before checking dimensions. Images are cached as lossless PNG without resizing or another JPEG compression pass. Existing JPEGs remain readable for the current wallpaper; new changes and prefetch use a separate cache version. This cannot repair blur already present in the source. A 3440x1440 fill requires at least 3440 pixels wide and 1440 high to avoid enlargement.
-
-Performance update: wallpaper downloads prepare a separate 560x360 JPEG preview at quality 75 from the already-decoded pixels. Later snapshots read that small file rather than decoding the full wallpaper again. Full-size PNG uses fast lossless compression. A synthetic 3840x2160 release benchmark measured about 24 ms to create a preview, 0.10 ms to read it, and 1.7 ms for 1,000 memory-cache reads; this does not measure network or live NSWorkspace latency. Redundant native wallpaper updates and a duplicate successful library write are skipped.
-
-Download refusals: failed URLs are shared between foreground and prefetch and skipped for five minutes. Existing legacy JPEGs can satisfy a change without another network request. New imports preserve the loaded image URL as a fallback for an unavailable original. For an older imported `/originals/` URL without a recorded source, a foreground change makes one bounded request to that pin's public page and stores only the exact image URLs exposed there. Private pins that do not expose a public page can be repaired by importing while that pin page is open in the authenticated Pinterest window. No account cookie is sent to the image CDN.
+Pinpaper is distributed under the [GNU General Public License v3.0](LICENSE). See the complete canonical license text in [`LICENSE`](LICENSE).
