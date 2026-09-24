@@ -6,24 +6,36 @@ on:
       - "v*"
   workflow_dispatch:
 
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macOS
-            os: macos-latest
+          - platform: macOS-arm64
+            os: macos-15
+            arch: arm64
+            bundles: dmg
+          - platform: macOS-x64
+            os: macos-15-intel
+            arch: x64
             bundles: dmg
           - platform: Windows
             os: windows-latest
+            arch: x64
             bundles: none
           - platform: Linux
             os: ubuntu-24.04
+            arch: x64
             bundles: appimage,deb
     steps:
       - name: Check out source
@@ -51,7 +63,7 @@ jobs:
         run: npm test
 
       - name: Run Rust tests
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml -- --test-threads=1
 
       - name: Build macOS DMG or Linux bundles
         if: runner.os != 'Windows'
@@ -62,14 +74,14 @@ jobs:
           if [ "${{ runner.os }}" = "macOS" ]; then
             bundle=$(find src-tauri/target/release/bundle -type f -name '*.dmg' -print -quit)
             test -n "$bundle"
-            cp "$bundle" "release-assets/Pinpaper_${version}_macOS.dmg"
+            cp "$bundle" "release-assets/Pinpaper_${version}_macOS_${{ matrix.arch }}.dmg"
           else
             appimage=$(find src-tauri/target/release/bundle -type f -name '*.AppImage' -print -quit)
             deb=$(find src-tauri/target/release/bundle -type f -name '*.deb' -print -quit)
             test -n "$appimage"
             test -n "$deb"
-            cp "$appimage" "release-assets/Pinpaper_${version}_linux.AppImage"
-            cp "$deb" "release-assets/Pinpaper_${version}_linux.deb"
+            cp "$appimage" "release-assets/Pinpaper_${version}_linux_x64.AppImage"
+            cp "$deb" "release-assets/Pinpaper_${version}_linux_x64.deb"
           fi
 
       - name: Build Windows portable executable
@@ -91,7 +103,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish GitHub release
+    name: Prepare GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
@@ -104,8 +116,19 @@ jobs:
           path: release-assets
           merge-multiple: true
 
+      - name: Check release files and generate checksums
+        working-directory: release-assets
+        run: |
+          test "$(find . -maxdepth 1 -name '*.dmg' | wc -l)" -eq 2
+          test "$(find . -maxdepth 1 -name '*.exe' | wc -l)" -eq 1
+          test "$(find . -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 1
+          test "$(find . -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
+          sha256sum *.dmg *.exe *.AppImage *.deb > SHA256SUMS.txt
+
       - name: Create release and attach bundles
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*
+          draft: true
+          fail_on_unmatched_files: true
           generate_release_notes: true
