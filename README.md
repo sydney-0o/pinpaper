@@ -42,15 +42,15 @@ Available for macOS, Windows, and Linux. Your collection is saved on your comput
 
 ### Install
 
-[Pinpaper 0.1.0 is available](https://github.com/sydney-0o/pinpaper/releases/tag/v0.1.0). Download the file for your computer:
+[Pinpaper 0.1.1 is available](https://github.com/sydney-0o/pinpaper/releases/tag/v0.1.1). Download the file for your computer:
 
 | System | File | What to do |
 | --- | --- | --- |
-| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_macOS_arm64.dmg) | Open the file and drag Pinpaper to Applications. |
-| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_macOS_x64.dmg) | Open the file and drag Pinpaper to Applications. |
-| Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_x64-portable.exe) | Keep it in any folder and double-click it. |
-| Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_linux_x64.AppImage) | Allow it to run in the file's Properties, then open it. |
-| Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_linux_x64.deb) | Double-click the file and choose Install. |
+| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_macOS_arm64.dmg) | Open the file and drag Pinpaper to Applications. |
+| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_macOS_x64.dmg) | Open the file and drag Pinpaper to Applications. |
+| Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_x64-portable.exe) | Keep it in any folder and double-click it. |
+| Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_linux_x64.AppImage) | Allow it to run in the file's Properties, then open it. |
+| Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_linux_x64.deb) | Double-click the file and choose Install. |
 
 <details>
 <summary>macOS details</summary>
@@ -86,7 +86,7 @@ Use the `.deb` package on Debian or Ubuntu. AppImage is convenient when you want
 
 Linux downloads are for x64 computers and are built on Ubuntu 24.04.
 
-Changing wallpapers works on GNOME, Unity, Budgie, Cinnamon, and MATE. KDE, Xfce, and wlroots-only desktops are not supported yet.
+Changing wallpapers works on GNOME, Unity, Budgie, Cinnamon, MATE, KDE Plasma, and Xfce. KDE Plasma uses `plasma-apply-wallpaperimage` from `plasma-workspace` and updates all Plasma desktops and monitors. Xfce uses `xfconf-query` and updates every configured monitor and workspace. If the required desktop tool is missing, Pinpaper reports it so you can install the matching desktop package. wlroots-only desktops are not supported.
 
 </details>
 
@@ -208,15 +208,15 @@ Pinpaper ставит картинки из Pinterest на обои рабоче
 
 ### Установка
 
-[Pinpaper 0.1.0 уже доступен](https://github.com/sydney-0o/pinpaper/releases/tag/v0.1.0). Скачайте файл для своего компьютера:
+[Pinpaper 0.1.1 уже доступен](https://github.com/sydney-0o/pinpaper/releases/tag/v0.1.1). Скачайте файл для своего компьютера:
 
 | Система | Файл | Что делать |
 | --- | --- | --- |
-| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_macOS_arm64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». |
-| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_macOS_x64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». |
-| Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_x64-portable.exe) | Сохранить в удобную папку и запустить двойным щелчком. |
-| Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_linux_x64.AppImage) | Разрешить запуск в свойствах файла, затем открыть его. |
-| Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_linux_x64.deb) | Открыть файл двойным щелчком и нажать «Установить». |
+| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_macOS_arm64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». |
+| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_macOS_x64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». |
+| Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_x64-portable.exe) | Сохранить в удобную папку и запустить двойным щелчком. |
+| Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_linux_x64.AppImage) | Разрешить запуск в свойствах файла, затем открыть его. |
+| Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_linux_x64.deb) | Открыть файл двойным щелчком и нажать «Установить». |
 
 <details>
 <summary>Подробности для macOS</summary>
@@ -252,7 +252,7 @@ DEB подходит для Debian и Ubuntu. AppImage удобнее, если 
 
 Файлы для Linux рассчитаны на компьютеры x64 и собраны на Ubuntu 24.04.
 
-Смена обоев работает в GNOME, Unity, Budgie, Cinnamon и MATE. KDE, Xfce и окружения только с wlroots пока не поддерживаются.
+Смена обоев работает в GNOME, Unity, Budgie, Cinnamon, MATE, KDE Plasma и Xfce. KDE Plasma использует `plasma-apply-wallpaperimage` из пакета `plasma-workspace` и обновляет все рабочие столы и мониторы Plasma. Xfce использует `xfconf-query` и обновляет все настроенные мониторы и рабочие столы. Если нужная утилита не установлена, Pinpaper сообщит об этом, чтобы можно было установить пакет соответствующего окружения. Окружения только с wlroots не поддерживаются.
 
 </details>
 

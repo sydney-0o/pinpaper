@@ -922,41 +922,322 @@ pub fn apply(_app: &tauri::AppHandle, path: &Path, _display_mode: &str) -> Resul
         Err("Windows could not set the desktop wallpaper".into())
     }
 }
+#[cfg(any(target_os = "linux", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LinuxDesktop {
+    Gnome,
+    Cinnamon,
+    Mate,
+    Kde,
+    Xfce,
+    Unsupported,
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn desktop_hint_contains(value: &str, hint: &str) -> bool {
+    value
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .any(|token| {
+            let token = token.to_ascii_lowercase();
+            token == hint
+                // Session names commonly use these suffixes (for example
+                // "plasmawayland" and "xfce4"). Keep the prefix matching
+                // narrow so an unrelated value such as "material" does not
+                // look like the MATE desktop.
+                || matches!(hint, "plasma" | "xfce") && token.starts_with(hint)
+        })
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn detect_linux_desktop(
+    current_desktop: &str,
+    session_desktop: &str,
+    desktop_session: &str,
+    kde_full_session: bool,
+) -> LinuxDesktop {
+    let hints = [current_desktop, session_desktop, desktop_session];
+    let contains = |hint: &str| hints.iter().any(|value| desktop_hint_contains(value, hint));
+
+    // Check Plasma and Xfce before the older generic desktop checks. Some
+    // distributions expose more than one name in XDG_CURRENT_DESKTOP, for
+    // example "KDE;Plasma" or "X-Cinnamon".
+    if kde_full_session || contains("kde") || contains("plasma") {
+        LinuxDesktop::Kde
+    } else if contains("xfce") {
+        LinuxDesktop::Xfce
+    } else if contains("gnome") || contains("unity") || contains("budgie") {
+        LinuxDesktop::Gnome
+    } else if contains("cinnamon") {
+        LinuxDesktop::Cinnamon
+    } else if contains("mate") {
+        LinuxDesktop::Mate
+    } else {
+        LinuxDesktop::Unsupported
+    }
+}
+
 #[cfg(target_os = "linux")]
-pub fn apply(_app: &tauri::AppHandle, path: &Path, _display_mode: &str) -> Result<(), String> {
-    let desktop = std::env::var("XDG_CURRENT_DESKTOP")
-        .unwrap_or_default()
-        .to_lowercase();
+fn run_linux_tool(
+    command: &mut std::process::Command,
+    operation: &str,
+) -> Result<std::process::Output, String> {
+    let program = command.get_program().to_string_lossy().into_owned();
+    match command.output() {
+        Ok(output) if output.status.success() => Ok(output),
+        Ok(output) => {
+            let status = output
+                .status
+                .code()
+                .map(|code| format!(" (exit code {code})"))
+                .unwrap_or_else(|| " (terminated by a signal)".into());
+            let detail = [
+                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+                String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+            ]
+            .into_iter()
+            .find(|text| !text.is_empty())
+            .unwrap_or_default();
+            if detail.is_empty() {
+                Err(format!("{operation} failed{status} ({program} returned no details)"))
+            } else {
+                Err(format!("{operation} failed{status}: {detail}"))
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(format!(
+            "{operation} is unavailable: {program} was not found in PATH"
+        )),
+        Err(error) => Err(format!("{operation} could not start {program}: {error}")),
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn kde_fill_mode(display_mode: &str) -> &'static str {
+    match display_mode {
+        "fit" => "preserveAspectFit",
+        "center" => "pad",
+        "stretch" => "stretch",
+        // Plasma's image wallpaper plugin has no tile mode. Keep the
+        // aspect ratio and crop rather than passing an invalid value to the
+        // official helper (which would reject the whole update).
+        "tile" => "preserveAspectCrop",
+        // `fill` is Pinpaper's default: preserve the aspect ratio while
+        // filling the display, cropping the excess edges.
+        _ => "preserveAspectCrop",
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn kde_path_arg(path: &Path) -> Result<std::ffi::OsString, String> {
+    let path = path
+        .to_str()
+        .ok_or("KDE Plasma requires a UTF-8 wallpaper path")?;
+    // KDE's official helper passes the path into a Plasma JavaScript snippet.
+    // It rejects apostrophes itself, but rejecting all characters that would
+    // need JavaScript escaping gives the user a useful error and keeps the
+    // path a single, literal process argument. No shell is involved here.
+    if path
+        .chars()
+        .any(|character| matches!(character, '\'' | '\\' | '\n' | '\r' | '\0'))
+    {
+        return Err(
+            "KDE Plasma cannot safely use a wallpaper path containing a quote, backslash, or newline"
+                .into(),
+        );
+    }
+    Ok(path.into())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn kde_command_args(path: &Path, display_mode: &str) -> Result<Vec<std::ffi::OsString>, String> {
+    Ok(vec![
+        "--fill-mode".into(),
+        kde_fill_mode(display_mode).into(),
+        kde_path_arg(path)?,
+    ])
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn kde_legacy_command_args(path: &Path) -> Result<Vec<std::ffi::OsString>, String> {
+    Ok(vec![kde_path_arg(path)?])
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn kde_help_supports_fill_mode(stdout: &[u8], stderr: &[u8]) -> bool {
+    [stdout, stderr].iter().any(|output| {
+        String::from_utf8_lossy(output)
+            .split_whitespace()
+            .any(|argument| argument == "--fill-mode" || argument == "-f")
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn apply_kde(path: &Path, display_mode: &str) -> Result<(), String> {
+    // Plasma 5.27 ships the same helper name but predates its --fill-mode
+    // option. Probe the help text so both Plasma generations can set the
+    // image without turning a valid wallpaper change into an unknown-option
+    // error. The helper itself still reports missing tools and DBus failures.
+    let mut help_command = std::process::Command::new("plasma-apply-wallpaperimage");
+    let supports_fill_mode = help_command
+        .arg("--help")
+        .output()
+        .map(|output| {
+            output.status.success() && kde_help_supports_fill_mode(&output.stdout, &output.stderr)
+        })
+        .unwrap_or(false);
+    let args = if supports_fill_mode {
+        kde_command_args(path, display_mode)?
+    } else {
+        kde_legacy_command_args(path)?
+    };
+    let mut command = std::process::Command::new("plasma-apply-wallpaperimage");
+    command.args(args);
+    run_linux_tool(&mut command, "KDE Plasma wallpaper update").map(|_| ())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn valid_xfconf_path(path: &str, suffix: &str) -> bool {
+    path.starts_with("/backdrop/")
+        && path.ends_with(suffix)
+        && path.chars().all(|character| !character.is_control())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn xfce_property_paths(listing: &str, suffix: &str) -> Vec<String> {
+    let mut paths = std::collections::BTreeSet::new();
+    for line in listing.lines() {
+        let path = line.trim();
+        if valid_xfconf_path(path, suffix) {
+            paths.insert(path.to_owned());
+        }
+    }
+    paths.into_iter().collect()
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn xfce_wallpaper_paths(listing: &str) -> Vec<String> {
+    let mut paths = xfce_property_paths(listing, "/last-image");
+    paths.extend(xfce_property_paths(listing, "/image-path"));
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn xfce_image_style(display_mode: &str) -> &'static str {
+    match display_mode {
+        "fit" => "4",     // scaled, preserving the aspect ratio
+        "center" => "1",  // centered at the source size
+        "tile" => "2",    // repeated in both directions
+        "stretch" => "3", // stretched independently on each axis
+        _ => "5",          // zoomed/cropped, preserving the aspect ratio
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn xfconf_set_args(property: &str, value: &std::ffi::OsStr) -> Vec<std::ffi::OsString> {
+    vec![
+        "-c".into(),
+        "xfce4-desktop".into(),
+        "-p".into(),
+        property.into(),
+        "-s".into(),
+        value.to_owned(),
+    ]
+}
+
+#[cfg(target_os = "linux")]
+fn xfconf_set(property: &str, value: &std::ffi::OsStr) -> Result<(), String> {
+    let args = xfconf_set_args(property, value);
+    let mut command = std::process::Command::new("xfconf-query");
+    command.args(args);
+    run_linux_tool(
+        &mut command,
+        &format!("Xfce wallpaper property update for {property}"),
+    )
+    .map(|_| ())
+}
+
+#[cfg(target_os = "linux")]
+fn apply_xfce(path: &Path, display_mode: &str) -> Result<(), String> {
+    let path = path
+        .to_str()
+        .ok_or("Xfce requires a UTF-8 wallpaper path")?;
+    let mut listing_command = std::process::Command::new("xfconf-query");
+    listing_command.args(["-c", "xfce4-desktop", "-l"]);
+    let listing = run_linux_tool(&mut listing_command, "Xfce wallpaper configuration query")?;
+    let listing = String::from_utf8_lossy(&listing.stdout);
+    let wallpaper_paths = xfce_wallpaper_paths(&listing);
+    if wallpaper_paths.is_empty() {
+        return Err(
+            "Xfce did not expose any configured wallpaper monitor/workspace properties; open Xfce's desktop settings once, then try again"
+                .into(),
+        );
+    }
+
+    // Xfce stores settings per monitor and, on current versions, per
+    // workspace. Updating every discovered path keeps all monitors and
+    // workspaces in sync, including monitor names such as monitorDP-1.
+    for property in wallpaper_paths {
+        xfconf_set(&property, std::ffi::OsStr::new(path))?;
+    }
+    for property in xfce_property_paths(&listing, "/image-style") {
+        xfconf_set(
+            &property,
+            std::ffi::OsStr::new(xfce_image_style(display_mode)),
+        )?;
+    }
+    // A user may have previously selected a solid-color backdrop. When an
+    // image is explicitly selected in Pinpaper, turn the corresponding image
+    // switches back on if the desktop exposes them.
+    for property in xfce_property_paths(&listing, "/image-show") {
+        xfconf_set(&property, std::ffi::OsStr::new("true"))?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub fn apply(_app: &tauri::AppHandle, path: &Path, display_mode: &str) -> Result<(), String> {
+    let current_desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    let session_desktop = std::env::var("XDG_SESSION_DESKTOP").unwrap_or_default();
+    let desktop_session = std::env::var("DESKTOP_SESSION").unwrap_or_default();
+    let kde_full_session = std::env::var("KDE_FULL_SESSION")
+        .map(|value| value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+        || std::env::var("KDE_SESSION_VERSION")
+            .map(|value| !value.is_empty())
+            .unwrap_or(false);
+    let desktop = detect_linux_desktop(
+        &current_desktop,
+        &session_desktop,
+        &desktop_session,
+        kde_full_session,
+    );
     let uri = url::Url::from_file_path(path)
         .map_err(|_| "Invalid wallpaper path")?
         .to_string();
     let run = |schema: &str, key: &str, value: &str| -> Result<(), String> {
-        let ok = std::process::Command::new("gsettings")
-            .args(["set", schema, key, value])
-            .status()
-            .map_err(|_| "gsettings is unavailable")?;
-        if ok.success() {
-            Ok(())
-        } else {
-            Err("Desktop rejected wallpaper setting".into())
-        }
+        let mut command = std::process::Command::new("gsettings");
+        command.args(["set", schema, key, value]);
+        run_linux_tool(&mut command, "Linux wallpaper update").map(|_| ())
     };
-    if desktop.contains("gnome") || desktop.contains("unity") || desktop.contains("budgie") {
-        run("org.gnome.desktop.background", "picture-uri", &uri)?;
-        run("org.gnome.desktop.background", "picture-uri-dark", &uri)
-    } else if desktop.contains("cinnamon") {
-        run("org.cinnamon.desktop.background", "picture-uri", &uri)
-    } else if desktop.contains("mate") {
-        run(
+    match desktop {
+        LinuxDesktop::Kde => apply_kde(path, display_mode),
+        LinuxDesktop::Xfce => apply_xfce(path, display_mode),
+        LinuxDesktop::Gnome => {
+            run("org.gnome.desktop.background", "picture-uri", &uri)?;
+            run("org.gnome.desktop.background", "picture-uri-dark", &uri)
+        }
+        LinuxDesktop::Cinnamon => run("org.cinnamon.desktop.background", "picture-uri", &uri),
+        LinuxDesktop::Mate => run(
             "org.mate.background",
             "picture-filename",
             path.to_str().ok_or("Non UTF-8 path")?,
-        )
-    } else {
-        Err(
-            "This Linux desktop is not supported yet. MVP supports GNOME, Cinnamon and MATE."
+        ),
+        LinuxDesktop::Unsupported => Err(
+            "This Linux desktop is not supported. Pinpaper supports GNOME, Unity, Budgie, Cinnamon, MATE, KDE Plasma, and Xfce; wlroots-only desktops are not supported."
                 .into(),
-        )
+        ),
     }
 }
 
@@ -1549,5 +1830,122 @@ mod download_tests {
         assert!(!temporarily_unavailable(&matching));
         assert!(temporarily_unavailable(&unrelated));
         failures().lock().unwrap().clear();
+    }
+}
+
+#[cfg(test)]
+mod linux_backend_tests {
+    use super::*;
+    use std::ffi::{OsStr, OsString};
+
+    #[test]
+    fn detects_common_kde_and_xfce_session_names() {
+        assert_eq!(
+            detect_linux_desktop("KDE;Plasma", "", "", false),
+            LinuxDesktop::Kde
+        );
+        assert_eq!(
+            detect_linux_desktop("", "plasmawayland", "", false),
+            LinuxDesktop::Kde
+        );
+        assert_eq!(
+            detect_linux_desktop("X-XFCE", "", "", false),
+            LinuxDesktop::Xfce
+        );
+        assert_eq!(
+            detect_linux_desktop("", "", "xfce", false),
+            LinuxDesktop::Xfce
+        );
+        assert_eq!(
+            detect_linux_desktop("X-Cinnamon", "", "", false),
+            LinuxDesktop::Cinnamon
+        );
+        assert_eq!(
+            detect_linux_desktop("", "", "", true),
+            LinuxDesktop::Kde
+        );
+        assert_eq!(
+            detect_linux_desktop("sway", "", "", false),
+            LinuxDesktop::Unsupported
+        );
+        assert_eq!(
+            detect_linux_desktop("material-shell", "", "", false),
+            LinuxDesktop::Unsupported
+        );
+    }
+
+    #[test]
+    fn maps_pinpaper_display_modes_to_upstream_tools() {
+        assert_eq!(kde_fill_mode("fill"), "preserveAspectCrop");
+        assert_eq!(kde_fill_mode("fit"), "preserveAspectFit");
+        assert_eq!(kde_fill_mode("center"), "pad");
+        assert_eq!(kde_fill_mode("tile"), "preserveAspectCrop");
+        assert_eq!(kde_fill_mode("stretch"), "stretch");
+        assert_eq!(xfce_image_style("fill"), "5");
+        assert_eq!(xfce_image_style("fit"), "4");
+        assert_eq!(xfce_image_style("center"), "1");
+        assert_eq!(xfce_image_style("tile"), "2");
+        assert_eq!(xfce_image_style("stretch"), "3");
+    }
+
+    #[test]
+    fn discovers_all_xfce_monitor_and_workspace_properties() {
+        let listing = "\
+/backdrop/screen0/monitorDP-1/workspace0/last-image
+/backdrop/screen0/monitorDP-1/workspace1/last-image
+/backdrop/screen0/monitorHDMI-1/workspace0/image-path
+/backdrop/screen0/monitorHDMI-1/workspace0/image-style
+/backdrop/screen0/monitorHDMI-1/workspace0/image-show
+/desktop-icons/style
+/not-a-backdrop/monitor0/last-image
+";
+        assert_eq!(
+            xfce_wallpaper_paths(listing),
+            vec![
+                "/backdrop/screen0/monitorDP-1/workspace0/last-image".to_owned(),
+                "/backdrop/screen0/monitorDP-1/workspace1/last-image".to_owned(),
+                "/backdrop/screen0/monitorHDMI-1/workspace0/image-path".to_owned(),
+            ]
+        );
+        assert_eq!(
+            xfce_property_paths(listing, "/image-style"),
+            vec!["/backdrop/screen0/monitorHDMI-1/workspace0/image-style".to_owned()]
+        );
+    }
+
+    #[test]
+    fn process_arguments_keep_shell_metacharacters_as_literal_values() {
+        let path = Path::new("/tmp/wallpapers/photo with spaces; $HOME & \"quoted\".png");
+        let kde_args = kde_command_args(path, "fill").unwrap();
+        assert_eq!(kde_args[0], OsString::from("--fill-mode"));
+        assert_eq!(kde_args[1], OsString::from("preserveAspectCrop"));
+        assert_eq!(kde_args[2], path.as_os_str().to_owned());
+        assert_eq!(
+            kde_legacy_command_args(path).unwrap(),
+            vec![path.as_os_str().to_owned()]
+        );
+        assert!(kde_help_supports_fill_mode(
+            b"Options: -f, --fill-mode <fill-mode>",
+            b""
+        ));
+        assert!(!kde_help_supports_fill_mode(
+            b"Options: --help, --version",
+            b""
+        ));
+
+        let xfce_args = xfconf_set_args(
+            "/backdrop/screen0/monitorDP-1/workspace0/last-image",
+            OsStr::new("/tmp/a wallpaper; printf unsafe 'text'.png"),
+        );
+        assert_eq!(xfce_args[0], OsString::from("-c"));
+        assert_eq!(
+            xfce_args[3],
+            OsString::from("/backdrop/screen0/monitorDP-1/workspace0/last-image")
+        );
+        assert_eq!(
+            xfce_args[5],
+            OsString::from("/tmp/a wallpaper; printf unsafe 'text'.png")
+        );
+        assert!(kde_command_args(Path::new("/tmp/a'quote.png"), "fill").is_err());
     }
 }
