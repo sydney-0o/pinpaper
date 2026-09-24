@@ -42,17 +42,20 @@ Available for macOS, Windows, and Linux. Your collection is saved on your comput
 
 ### Install
 
-Ready-to-use downloads are not available yet. They will appear in [Releases](https://github.com/sydney-0o/pinpaper/releases).
+[Pinpaper 0.1.0 is available](https://github.com/sydney-0o/pinpaper/releases/tag/v0.1.0). Download the file for your computer:
 
 | System | File | What to do |
 | --- | --- | --- |
-| macOS 11+ | `.dmg` | Open the file and drag Pinpaper to Applications. |
-| Windows 10/11 | `x64-portable.exe` | Keep it in any folder and double-click it. |
-| Linux | `.AppImage` | Allow it to run in the file's Properties, then open it. |
-| Debian / Ubuntu | `.deb` | Double-click the file and choose Install. |
+| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_macOS_arm64.dmg) | Open the file and drag Pinpaper to Applications. |
+| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_macOS_x64.dmg) | Open the file and drag Pinpaper to Applications. |
+| Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_x64-portable.exe) | Keep it in any folder and double-click it. |
+| Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_linux_x64.AppImage) | Allow it to run in the file's Properties, then open it. |
+| Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_linux_x64.deb) | Double-click the file and choose Install. |
 
 <details>
 <summary>macOS details</summary>
+
+Choose **Apple menu → About This Mac** to check your processor. For an M1 or newer chip, download the `arm64` file. For an Intel processor, download `x64`.
 
 The app is not yet signed by Apple. macOS may show a warning when you first open it. Check that you downloaded it from this repository's Releases page, then use macOS's **Open** option if offered.
 
@@ -75,11 +78,13 @@ An unsigned build may also trigger SmartScreen. Before choosing **More info → 
 For an AppImage, enable **Allow executing file as program** in the file properties and open it. The equivalent terminal commands are:
 
 ```sh
-chmod +x Pinpaper_*_linux.AppImage
-./Pinpaper_*_linux.AppImage
+chmod +x Pinpaper_*_linux_x64.AppImage
+./Pinpaper_*_linux_x64.AppImage
 ```
 
 Use the `.deb` package on Debian or Ubuntu. AppImage is convenient when you want a movable copy without an installation step.
+
+Linux downloads are for x64 computers and are built on Ubuntu 24.04.
 
 Changing wallpapers works on GNOME, Unity, Budgie, Cinnamon, and MATE. KDE, Xfce, and wlroots-only desktops are not supported yet.
 
@@ -176,9 +181,9 @@ Windows builds use WebView2 and Visual Studio C++ Build Tools. Linux builds need
 
 | System | Release file |
 | --- | --- |
-| macOS | `Pinpaper_<version>_macOS.dmg` |
+| macOS | `Pinpaper_<version>_macOS_arm64.dmg` or `Pinpaper_<version>_macOS_x64.dmg` |
 | Windows | `Pinpaper_<version>_x64-portable.exe` |
-| Linux | `Pinpaper_<version>_linux.AppImage` and `Pinpaper_<version>_linux.deb` |
+| Linux | `Pinpaper_<version>_linux_x64.AppImage` and `Pinpaper_<version>_linux_x64.deb` |
 
 </details>
 
@@ -203,17 +208,20 @@ Pinpaper ставит картинки из Pinterest на обои рабоче
 
 ### Установка
 
-Готовых файлов для скачивания пока нет. Они появятся в разделе [Releases](https://github.com/sydney-0o/pinpaper/releases).
+[Pinpaper 0.1.0 уже доступен](https://github.com/sydney-0o/pinpaper/releases/tag/v0.1.0). Скачайте файл для своего компьютера:
 
 | Система | Файл | Что делать |
 | --- | --- | --- |
-| macOS 11+ | `.dmg` | Открыть файл и перетащить Pinpaper в «Программы». |
-| Windows 10/11 | `x64-portable.exe` | Сохранить в удобную папку и запустить двойным щелчком. |
-| Linux | `.AppImage` | Разрешить запуск в свойствах файла, затем открыть его. |
-| Debian / Ubuntu | `.deb` | Открыть файл двойным щелчком и нажать «Установить». |
+| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_macOS_arm64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». |
+| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_macOS_x64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». |
+| Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_x64-portable.exe) | Сохранить в удобную папку и запустить двойным щелчком. |
+| Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_linux_x64.AppImage) | Разрешить запуск в свойствах файла, затем открыть его. |
+| Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.0/Pinpaper_0.1.0_linux_x64.deb) | Открыть файл двойным щелчком и нажать «Установить». |
 
 <details>
 <summary>Подробности для macOS</summary>
+
+Посмотрите процессор в меню **Apple → Об этом Mac**. Для M1 и новее скачайте файл `arm64`, для Intel — `x64`.
 
 У приложения пока нет подписи Apple, поэтому при первом запуске macOS может показать предупреждение. Убедитесь, что файл скачан со страницы Releases этого репозитория. Если macOS предлагает действие **Открыть**, воспользуйтесь им.
 
@@ -236,11 +244,13 @@ Pinpaper ставит картинки из Pinterest на обои рабоче
 Для AppImage откройте свойства файла и разрешите запуск как программы. Затем откройте файл. Через терминал:
 
 ```sh
-chmod +x Pinpaper_*_linux.AppImage
-./Pinpaper_*_linux.AppImage
+chmod +x Pinpaper_*_linux_x64.AppImage
+./Pinpaper_*_linux_x64.AppImage
 ```
 
 DEB подходит для Debian и Ubuntu. AppImage удобнее, если нужна переносимая копия без установки.
+
+Файлы для Linux рассчитаны на компьютеры x64 и собраны на Ubuntu 24.04.
 
 Смена обоев работает в GNOME, Unity, Budgie, Cinnamon и MATE. KDE, Xfce и окружения только с wlroots пока не поддерживаются.
 
@@ -337,8 +347,8 @@ npm run tauri -- build --no-bundle
 
 | Система | Файл релиза |
 | --- | --- |
-| macOS | `Pinpaper_<version>_macOS.dmg` |
+| macOS | `Pinpaper_<version>_macOS_arm64.dmg` или `Pinpaper_<version>_macOS_x64.dmg` |
 | Windows | `Pinpaper_<version>_x64-portable.exe` |
-| Linux | `Pinpaper_<version>_linux.AppImage` и `Pinpaper_<version>_linux.deb` |
+| Linux | `Pinpaper_<version>_linux_x64.AppImage` и `Pinpaper_<version>_linux_x64.deb` |
 
 </details>
