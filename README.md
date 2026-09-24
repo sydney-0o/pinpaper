@@ -14,16 +14,16 @@
 
 ## English
 
-Import pictures from Pinterest and change your desktop wallpaper manually or on a schedule.
+Pinpaper turns pictures from Pinterest into desktop wallpapers. Change them with one click or let the app change them automatically.
 
-Runs in the menu bar or system tray on macOS, Windows, and Linux. Your imported collection stays on your computer.
+Available for macOS, Windows, and Linux. Your collection is saved on your computer.
 
 ### What Pinpaper does
 
-- Import pictures from Pinterest Home or a saved board.
-- Filter by collections, words, orientation, and minimum width.
-- Change the wallpaper manually or on a schedule.
-- Hide pictures locally, open their pins, and launch Pinpaper with your computer.
+- Add pictures from your Pinterest feed or a board.
+- Choose which collections and image sizes to use.
+- Set how often your wallpaper changes.
+- Hide pictures you don't want to see.
 
 ### Screenshots
 
@@ -42,26 +42,28 @@ Runs in the menu bar or system tray on macOS, Windows, and Linux. Your imported 
 
 ### Install
 
-Builds are coming to [Releases](https://github.com/sydney-0o/pinpaper/releases). Download the file for your system and open it when the first build is available.
+Ready-to-use downloads are not available yet. They will appear in [Releases](https://github.com/sydney-0o/pinpaper/releases).
 
 | System | File | What to do |
 | --- | --- | --- |
-| macOS 11+ | `.dmg` | Open the disk image and drag Pinpaper to Applications. |
+| macOS 11+ | `.dmg` | Open the file and drag Pinpaper to Applications. |
 | Windows 10/11 | `x64-portable.exe` | Keep it in any folder and double-click it. |
-| Linux | `.AppImage` | Make the file executable and launch it. |
-| Debian / Ubuntu | `.deb` | Open the package with the system software installer. |
+| Linux | `.AppImage` | Allow it to run in the file's Properties, then open it. |
+| Debian / Ubuntu | `.deb` | Double-click the file and choose Install. |
 
 <details>
 <summary>macOS details</summary>
 
-Open the `.dmg`, drag Pinpaper to Applications, and launch it from there. An unsigned build may show a macOS warning; control-click the app, choose **Open**, and confirm when that happens.
+The app is not yet signed by Apple. macOS may show a warning when you first open it. Check that you downloaded it from this repository's Releases page, then use macOS's **Open** option if offered.
 
 </details>
 
 <details>
 <summary>Windows details</summary>
 
-`x64-portable.exe` does not install Pinpaper system-wide: keep it in any folder and run it there. Windows 10 and 11 normally include WebView2. If Windows reports that WebView2 is missing, install the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) once.
+No installer is needed. Keep the `.exe` in a folder where you want to use it.
+
+If the app asks for WebView2, install the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) and try again.
 
 An unsigned build may also trigger SmartScreen. Before choosing **More info → Run anyway**, check that the file came from this repository's Releases page.
 
@@ -79,61 +81,65 @@ chmod +x Pinpaper_*_linux.AppImage
 
 Use the `.deb` package on Debian or Ubuntu. AppImage is convenient when you want a movable copy without an installation step.
 
-The wallpaper adapter supports GNOME, Unity, Budgie, Cinnamon, and MATE. KDE, Xfce, and wlroots-only desktops are not supported yet.
+Changing wallpapers works on GNOME, Unity, Budgie, Cinnamon, and MATE. KDE, Xfce, and wlroots-only desktops are not supported yet.
 
 </details>
 
 ### First launch
 
-1. Open Pinpaper and go to **Settings**.
-2. Choose **Open Pinterest** and sign in in the private Pinterest window that Pinpaper opens. Complete any verification there.
-3. In that window, open Home or **Profile → Saved → a board**, scroll, and wait for the pictures you want to load.
-4. Return to Pinpaper and choose **Add pictures**. Each import can add up to 200 loaded pictures; scroll further and repeat when needed.
-5. Select collections and filters, save the settings, and choose **Change wallpaper**.
+1. In Pinpaper, open **Settings → Open Pinterest**.
+2. Sign in to Pinterest in the window that opens.
+3. Open your feed or a saved board. Scroll to load the pictures you want.
+4. Return to Pinpaper and click **Add pictures**.
+5. Choose your collections, save the settings, and click **Change wallpaper**.
 
-Under **Automatic changes**, set an interval and active hours, then enable automatic changes. Closing the main window leaves Pinpaper in the menu bar or system tray; choose **Quit Pinpaper** there to stop it completely.
+Want more pictures? Scroll further in Pinterest and click **Add pictures** again. Each import adds up to 200 pictures. Videos are skipped.
+
+### Automatic wallpaper changes
+
+In **Automatic changes**, choose how often to change the wallpaper and during which hours. Then turn automatic changes on.
+
+Pinpaper keeps working when you close its window. To stop it, click its icon near the system clock and choose **Quit Pinpaper**.
 
 #### Start with your computer
 
-Enable **Launch Pinpaper when I sign in** in Settings and save. Clear the checkbox to turn it off. If you use a portable AppImage, keep it in a permanent folder before enabling startup.
+In Settings, turn on **Launch Pinpaper when I sign in** and save. Turn it off the same way.
+
+Keep a portable copy in a permanent folder before enabling this option.
 
 <details>
-<summary>Startup file locations</summary>
+<summary>How pictures are picked</summary>
 
-| System | Per-user startup entry |
-| --- | --- |
-| macOS | `~/Library/LaunchAgents/app.pinpaper.desktop.plist` |
-| Windows | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` |
-| Linux | `~/.config/autostart/app.pinpaper.desktop` |
+Pinpaper goes through the pictures that match your settings before starting again. It skips pictures that cannot be downloaded or are too small.
 
-The entry is created for the current user only and does not require administrator access. For an AppImage, Pinpaper stores the path to that AppImage.
+Changing filters updates which pictures can be used. Your collection and progress are saved, so you do not need to add everything again after restarting or updating the app.
 
 </details>
 
-<details>
-<summary>How wallpaper rotation moves through a collection</summary>
+### Privacy and Pinterest
 
-Rotation checks the remaining eligible pictures until the current round is exhausted. A failed download or an image that is too small counts as checked in that round, including a failed hand-off from a public outbound source back to the observed Pinterest copy. When filters change, the remaining eligible tail is kept; once the active eligible set is exhausted, a new round starts. Pictures already shown successfully stay in the saved progress, so a restart or an update does not require deleting the collection or importing it again.
+Pinpaper is an independent project that respects Pinterest. It is not an official Pinterest app and **does not use the Pinterest API**.
+
+- You choose the Pinterest page to import from.
+- Pinpaper does not read your password. The Pinterest window does not keep your login after you close it.
+- Your collection and settings stay on your computer. Hiding a picture in Pinpaper does not remove it from Pinterest.
+
+<details>
+<summary>Where the pictures come from</summary>
+
+Pinpaper downloads the pictures you import. If a pin links to a source website, the app may use the matching image from that site. Otherwise, it uses the Pinterest copy.
+
+Pinterest may ask you to verify your sign-in or change how its pages work. If pictures are missing, load more in Pinterest and try importing again.
 
 </details>
 
-### Pinterest, sources, and privacy
-
-Pinpaper respects Pinterest and is not affiliated with, sponsored by, or endorsed by Pinterest. Pinterest is a trademark of Pinterest, Inc.
-
-Pinpaper **does not use or exploit the Pinterest API**. No API key or developer registration is needed. You open Pinterest yourself in Pinpaper's private window, sign in there, and choose the page to import. Pinpaper never reads password fields, and the private window session is not stored after you close it.
-
-Imported metadata, preferences, and the local image cache stay on your computer. Opening a pin or hiding a picture changes only Pinpaper's local behavior. When a pin contains a verifiable public source page, the app may use that image; if the source is unavailable or cannot be verified, Pinpaper stays with the observed Pinterest copy and does not invent a URL.
-
-Pinterest pages can change, require verification, or expose only part of a feed. Videos are skipped. If the pictures you want were not loaded, scroll further in Pinterest and repeat the import.
-
-Image rights remain with their authors and owners. Pinpaper helps you use your personal collection on your desktop and does not claim ownership of the images.
+Images belong to their authors and owners. Pinterest is a trademark of Pinterest, Inc.
 
 ### License
 
-Pinpaper is distributed under the [GNU GPLv3](LICENSE). The complete license text is in [`LICENSE`](LICENSE).
+Pinpaper is free software licensed under [GNU GPLv3](LICENSE).
 
-For a problem or improvement, open an [issue](https://github.com/sydney-0o/pinpaper/issues).
+Found a problem or have an idea? [Tell us here](https://github.com/sydney-0o/pinpaper/issues).
 
 <details>
 <summary>Build from source and release workflow</summary>
@@ -182,41 +188,43 @@ Windows builds use WebView2 and Visual Studio C++ Build Tools. Linux builds need
 
 ## Русский
 
-Импортируйте картинки из Pinterest и меняйте обои рабочего стола вручную или по расписанию.
+Pinpaper ставит картинки из Pinterest на обои рабочего стола. Меняйте их одной кнопкой или включите автоматическую смену.
 
-Работает в меню-баре или системном трее на macOS, Windows и Linux. Импортированная коллекция остаётся на вашем компьютере.
+Работает на macOS, Windows и Linux. Коллекция сохраняется на вашем компьютере.
 
 ### Что умеет Pinpaper
 
-- Импортировать картинки из Home или сохранённой доски Pinterest.
-- Фильтровать их по коллекциям, словам, ориентации и минимальной ширине.
-- Менять обои вручную или по расписанию.
-- Локально скрывать картинки, открывать их пины и запускаться вместе с компьютером.
+- Добавлять картинки из ленты или доски Pinterest.
+- Выбирать коллекции и размер изображений для обоев.
+- Менять обои через заданные промежутки времени.
+- Скрывать картинки, которые вам не нравятся.
 
-Галерея интерфейса показана выше один раз, чтобы английская и русская версии не дублировали изображения.
+[Посмотреть скриншоты ↑](#screenshots)
 
 ### Установка
 
-Готовые сборки появятся на странице [Releases](https://github.com/sydney-0o/pinpaper/releases). Когда появится первая сборка, скачайте файл своей системы и откройте его.
+Готовых файлов для скачивания пока нет. Они появятся в разделе [Releases](https://github.com/sydney-0o/pinpaper/releases).
 
 | Система | Файл | Что делать |
 | --- | --- | --- |
-| macOS 11+ | `.dmg` | Открыть образ и перетащить Pinpaper в Applications. |
+| macOS 11+ | `.dmg` | Открыть файл и перетащить Pinpaper в «Программы». |
 | Windows 10/11 | `x64-portable.exe` | Сохранить в удобную папку и запустить двойным щелчком. |
-| Linux | `.AppImage` | Сделать файл исполняемым и запустить. |
-| Debian / Ubuntu | `.deb` | Открыть пакет системным установщиком программ. |
+| Linux | `.AppImage` | Разрешить запуск в свойствах файла, затем открыть его. |
+| Debian / Ubuntu | `.deb` | Открыть файл двойным щелчком и нажать «Установить». |
 
 <details>
 <summary>Подробности для macOS</summary>
 
-Откройте `.dmg`, перетащите Pinpaper в Applications и запустите его оттуда. Неподписанная сборка может показать предупреждение macOS: нажмите по приложению правой кнопкой, выберите **Open** и подтвердите запуск.
+У приложения пока нет подписи Apple, поэтому при первом запуске macOS может показать предупреждение. Убедитесь, что файл скачан со страницы Releases этого репозитория. Если macOS предлагает действие **Открыть**, воспользуйтесь им.
 
 </details>
 
 <details>
 <summary>Подробности для Windows</summary>
 
-`x64-portable.exe` не устанавливает Pinpaper в систему: его можно хранить и запускать из любой папки. Windows 10 и 11 обычно уже содержат WebView2. Если Windows сообщит, что WebView2 отсутствует, один раз установите [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/).
+Установщик не нужен: сохраните `.exe` в удобную папку и запускайте его оттуда.
+
+Если приложение попросит WebView2, установите [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) и попробуйте снова.
 
 Неподписанный файл может вызвать предупреждение SmartScreen. Перед запуском проверьте, что файл скачан со страницы Releases этого репозитория.
 
@@ -225,7 +233,7 @@ Windows builds use WebView2 and Visual Studio C++ Build Tools. Linux builds need
 <details>
 <summary>Подробности для Linux</summary>
 
-Для AppImage откройте свойства файла, включите **Allow executing file as program** и запустите его. В терминале это выглядит так:
+Для AppImage откройте свойства файла и разрешите запуск как программы. Затем откройте файл. Через терминал:
 
 ```sh
 chmod +x Pinpaper_*_linux.AppImage
@@ -234,61 +242,65 @@ chmod +x Pinpaper_*_linux.AppImage
 
 DEB подходит для Debian и Ubuntu. AppImage удобнее, если нужна переносимая копия без установки.
 
-Поддержаны интеграции обоев GNOME, Unity, Budgie, Cinnamon и MATE. KDE, Xfce и окружения только с wlroots пока не поддерживаются.
+Смена обоев работает в GNOME, Unity, Budgie, Cinnamon и MATE. KDE, Xfce и окружения только с wlroots пока не поддерживаются.
 
 </details>
 
 ### Первый запуск
 
-1. Откройте Pinpaper и перейдите в **Настройки**.
-2. Нажмите **Открыть Pinterest** и войдите в открывшемся приватном окне Pinterest. Если появится проверка, пройдите её там же.
-3. В этом окне откройте Home или **Профиль → Сохранённые → доска**, прокрутите страницу и дождитесь загрузки нужных картинок.
-4. Вернитесь в Pinpaper и нажмите **Добавить картинки**. За один импорт можно добавить до 200 загруженных картинок; при необходимости прокрутите Pinterest дальше и повторите импорт.
-5. Выберите коллекции и фильтры, сохраните настройки и нажмите **Сменить обои**.
+1. В Pinpaper откройте **Настройки → Открыть Pinterest**.
+2. Войдите в Pinterest в появившемся окне.
+3. Откройте ленту или сохранённую доску. Прокрутите страницу, чтобы загрузить нужные картинки.
+4. Вернитесь в Pinpaper и нажмите **Добавить картинки**.
+5. Выберите коллекции, сохраните настройки и нажмите **Сменить обои**.
 
-В разделе **Автоматическая смена** задайте интервал и часы активности, затем включите автоматическую смену. Закрытие окна оставляет Pinpaper работать в меню-баре или системном трее; пункт **Выйти из Pinpaper** полностью останавливает приложение.
+Хотите добавить ещё? Прокрутите Pinterest дальше и снова нажмите **Добавить картинки**. За один раз добавляется до 200 картинок. Видео пропускаются.
+
+### Автоматическая смена обоев
+
+В разделе **Автоматическая смена** выберите, как часто менять обои и в какие часы. Затем включите её.
+
+Pinpaper продолжает работать после закрытия окна. Чтобы остановить приложение, нажмите на его значок рядом с системными часами и выберите **Выйти из Pinpaper**.
 
 #### Запуск вместе с компьютером
 
-Включите **Запускать Pinpaper при входе в систему** в настройках и сохраните их. Снимите галочку, чтобы отключить автозапуск. Для переносимого AppImage сначала положите файл в постоянную папку.
+В настройках включите **Запускать Pinpaper при входе в систему** и сохраните изменения. Отключить можно там же.
+
+Если используете переносимую версию, сначала положите её в постоянную папку.
 
 <details>
-<summary>Технические пути автозапуска</summary>
+<summary>Как выбираются картинки</summary>
 
-| Система | Запись для текущего пользователя |
-| --- | --- |
-| macOS | `~/Library/LaunchAgents/app.pinpaper.desktop.plist` |
-| Windows | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` |
-| Linux | `~/.config/autostart/app.pinpaper.desktop` |
+Pinpaper перебирает картинки, которые подходят под ваши настройки, прежде чем начать заново. Слишком маленькие изображения и картинки, которые не удалось скачать, пропускаются.
 
-Запись создаётся только для текущего пользователя и не требует прав администратора. Для AppImage Pinpaper сохраняет путь к самому файлу.
+После изменения фильтров меняется и список подходящих картинок. Коллекция и прогресс сохраняются: после перезапуска или обновления добавлять всё заново не нужно.
 
 </details>
 
-<details>
-<summary>Как Pinpaper проходит коллекцию</summary>
+### Приватность и Pinterest
 
-Ротация проверяет оставшиеся подходящие картинки до конца текущего круга. Неудачная загрузка или изображение, которое оказалось слишком маленьким, считается проверенным в этом круге — в том числе если приложение перешло с внешнего источника на наблюдаемую копию Pinterest. После изменения фильтров оставшийся подходящий хвост сохраняется; новый круг начинается только после исчерпания активного набора. Уже успешно показанные картинки остаются в сохранённом прогрессе, поэтому после перезапуска или обновления не нужно удалять коллекцию и импортировать её заново.
+Pinpaper — независимый проект, созданный с уважением к Pinterest. Это не официальное приложение Pinterest. Оно **не использует Pinterest API**.
+
+- Вы сами выбираете страницу Pinterest, откуда добавить картинки.
+- Pinpaper не читает ваш пароль. Окно Pinterest не сохраняет вход после закрытия.
+- Коллекция и настройки хранятся на вашем компьютере. Скрытая в Pinpaper картинка остаётся в Pinterest.
+
+<details>
+<summary>Откуда берутся изображения</summary>
+
+Pinpaper скачивает добавленные вами картинки. Если у пина есть ссылка на сайт-источник, приложение может взять оттуда то же изображение. В остальных случаях используется копия из Pinterest.
+
+Pinterest может попросить подтвердить вход или изменить работу своих страниц. Если картинок не хватает, загрузите больше в Pinterest и повторите добавление.
 
 </details>
 
-### Pinterest, источники и приватность
-
-Pinpaper уважает Pinterest, не связан с Pinterest, не спонсируется им и не является его официальным приложением. Pinterest — товарный знак Pinterest, Inc.
-
-Pinpaper **не использует и не эксплуатирует Pinterest API**. Для импорта не нужны ключ API или регистрация разработчика. Вы сами открываете Pinterest в приватном окне Pinpaper, сами проходите вход и сами выбираете страницу для импорта. Pinpaper не читает поля пароля, а сессия приватного окна не сохраняется после его закрытия.
-
-Метаданные, настройки и локальный кэш хранятся на вашем компьютере. Открытие пина и скрытие картинки меняют только поведение Pinpaper. Когда у пина есть проверяемая публичная страница-источник, приложение может использовать изображение с неё; если источник недоступен или не подтверждён, Pinpaper остаётся на наблюдаемой копии Pinterest и не придумывает URL.
-
-Pinterest может изменить страницу, показать проверку или загрузить только часть ленты. Видео пропускаются. Если нужные картинки не попали в импорт, прокрутите Pinterest дальше и повторите импорт.
-
-Права на изображения остаются у их авторов и владельцев. Pinpaper помогает использовать вашу личную подборку на рабочем столе и не заявляет права на сами изображения.
+Права на изображения остаются у их авторов и владельцев. Pinterest — товарный знак Pinterest, Inc.
 
 ### Лицензия
 
-Pinpaper распространяется по лицензии [GNU GPLv3](LICENSE). Полный текст лицензии находится в файле [`LICENSE`](LICENSE).
+Pinpaper — свободное программное обеспечение под лицензией [GNU GPLv3](LICENSE).
 
-Если нашли проблему или хотите предложить улучшение, создайте [issue](https://github.com/sydney-0o/pinpaper/issues).
+Нашли ошибку или хотите что-то предложить? [Напишите здесь](https://github.com/sydney-0o/pinpaper/issues).
 
 <details>
 <summary>Сборка из исходников и выпуск релизов</summary>
