@@ -227,14 +227,12 @@ impl Engine {
                     max_attempts: candidate_limit,
                 }));
             },
-            |attempt, pin, error| {
-                // A downloaded image that fails the current filters is marked
-                // verified and disappears from the current eligible set. Do
-                // not persist that failed key, so relaxing the filters can
-                // make it available again without resetting the whole round.
-                if !error.contains("resolution/orientation filters") {
-                    rejected_attempts.push(pin.clone());
-                }
+            |attempt, pin, _error| {
+                // A source-backed pin can remain eligible for an original
+                // upgrade even after its decoded fallback fails geometry.
+                // Every rejection must advance this round; filter changes
+                // reopen failed candidates in begin_rotation_round.
+                rejected_attempts.push(pin.clone());
                 self.set_change_status(Some(ChangeStatus {
                     phase: "retrying",
                     attempt,
@@ -353,6 +351,10 @@ impl Engine {
         for attempted in &rejected_attempts {
             model::record_rotation_attempt(&mut lib, attempted);
         }
+        // Preparation may have exhausted the fresh tail during this request.
+        // Count the successful fallback as the first picture of the next
+        // round now, so the next click cannot clear it and repeat it early.
+        model::begin_rotation_round(&mut lib);
         pin.dimensions_verified = true;
         pin.width = w;
         pin.height = h;

@@ -672,7 +672,15 @@ pub fn record_rotation_attempt(lib: &mut Library, pin: &Pin) {
     if lib.rotation_filter_signature.is_empty() {
         lib.rotation_filter_signature = rotation_filter_signature(&lib.settings);
     }
-    let key = rotation_attempt_key(pin);
+    // Preparing a thumbnail can replace its URL before the attempt fails.
+    // Persist the prepared source, otherwise pruning immediately drops the
+    // old key and the same rejected pin stays fresh forever.
+    let stored = lib
+        .pins
+        .iter()
+        .find(|stored| stored.id == pin.id && stored.board_id == pin.board_id)
+        .unwrap_or(pin);
+    let key = rotation_attempt_key(stored);
     if !lib
         .rotation_attempted
         .iter()
@@ -706,6 +714,12 @@ pub fn begin_rotation_round(lib: &mut Library) -> bool {
         return false;
     }
     let current_signature = rotation_filter_signature(&lib.settings);
+    if !lib.rotation_filter_signature.is_empty() && current_signature != lib.rotation_filter_signature {
+        // A previous size/orientation rejection may now be usable. Reopen
+        // attempted candidates without losing successful round progress.
+        lib.rotation_attempted.clear();
+        lib.rotation_filter_signature = current_signature.clone();
+    }
     if lib.rotation_filter_signature.is_empty() {
         lib.rotation_filter_signature = current_signature.clone();
     }
@@ -945,6 +959,152 @@ mod tests {
         assert!(begin_rotation_round(&mut lib));
         assert!(lib.rotation_seen.is_empty());
         assert!(lib.rotation_attempted.is_empty());
+    }
+
+    #[test]
+    fn rejected_prepared_original_is_not_left_fresh_under_its_old_thumbnail_key() {
+        let mut lib = Library::default();
+        lib.settings.board_ids = vec!["b".into()];
+        lib.pins = vec![pin("1", "one"), pin("2", "two")];
+        let before_prepare = lib.pins[0].clone();
+        lib.pins[0].url = "https://i.pinimg.com/originals/prepared.png".into();
+        record_rotation_attempt(&mut lib, &before_prepare);
+        let restored: Library = serde_json::from_slice(&serde_json::to_vec(&lib).unwrap()).unwrap();
+        assert_eq!(foreground_rotation_candidates(&restored)[0].id, "2");
+        assert_eq!(
+            restored.rotation_attempted,
+            vec![rotation_attempt_key(&lib.pins[0])]
+        );
+    }
+
+    #[test]
+    fn relaxed_filters_retry_rejected_sources_without_repeating_successes() {
+        let mut lib = Library::default();
+        lib.settings.board_ids = vec!["b".into()];
+        lib.settings.min_width = 1440;
+        lib.pins = vec![pin("1", "one"), pin("2", "two"), pin("3", "three")];
+        lib.pins[1].width = 1280;
+        lib.pins[1].source_url = Some("https://example.com/wallpaper".into());
+        record_rotation(&mut lib, &pin("1", "one"));
+        let rejected = lib.pins[1].clone();
+        record_rotation_attempt(&mut lib, &rejected);
+        assert_eq!(foreground_rotation_candidates(&lib)[0].id, "3");
+        lib.settings.min_width = 1000;
+        assert!(!begin_rotation_round(&mut lib));
+        assert_eq!(foreground_rotation_candidates(&lib)[0].id, "2");
+        assert_eq!(lib.rotation_seen, vec![rotation_key(&lib.pins[0])]);
+    }
+
+    #[test]
+    fn small_source_fallbacks_allow_full_rounds_after_geometry_rejection() {
+        let mut lib = Library::default();
+        lib.settings.board_ids = vec!["b".into()];
+        lib.settings.orientation = "any".into();
+        lib.settings.min_width = 1440;
+        lib.pins = (0..17)
+            .map(|i| {
+                let mut pin = pin(&format!("{i:02}"), "picture");
+                pin.url = format!("https://i.pinimg.com/originals/{i:02}.jpg");
+                pin
+            })
+            .collect();
+        lib.pins[0].width = 960;
+        lib.pins[0].source_url = Some("https://example.com/wallpaper".into());
+        for successful in lib.pins[1..].to_vec() {
+            record_rotation(&mut lib, &successful);
+        }
+        lib.current = Some(lib.pins[2].clone());
+        assert_decoded_rotation_cycles(lib, 16);
+    }
+
+    // Replay the foreground selection and persistence transitions using only
+    // recorded decoded dimensions: no requests, file writes or OS changes.
+    fn assert_decoded_rotation_cycles(mut lib: Library, eligible_count: usize) {
+        let settings = lib.settings.clone();
+        for _ in 0..3 {
+            let mut visited = HashSet::new();
+            let mut positions = Vec::new();
+            for _ in 0..eligible_count {
+                lib = serde_json::from_slice(&serde_json::to_vec(&lib).unwrap()).unwrap();
+                begin_rotation_round(&mut lib);
+                let mut rejected = Vec::new();
+                let selected = crate::wallpaper::select_foreground_with_target(
+                    foreground_rotation_candidates(&lib),
+                    1,
+                    |_| true,
+                    |pin| (image_identity(pin), pin.url.clone()),
+                    |_, _| {},
+                    |_, pin, _| rejected.push(pin.clone()),
+                    |pin| {
+                        if !pin.dimensions_verified
+                            || pin.width < settings.min_width
+                            || (settings.orientation == "landscape" && pin.width <= pin.height)
+                            || (settings.orientation == "portrait" && pin.height <= pin.width)
+                        {
+                            Err(
+                                "Downloaded images do not meet your resolution/orientation filters"
+                                    .into(),
+                            )
+                        } else {
+                            Ok(pin.clone())
+                        }
+                    },
+                )
+                .unwrap()
+                .pop()
+                .unwrap();
+                for rejected in rejected {
+                    record_rotation_attempt(&mut lib, &rejected);
+                }
+                begin_rotation_round(&mut lib);
+                assert!(
+                    visited.insert(selected.id.clone()),
+                    "repeated {}",
+                    selected.id
+                );
+                positions.push(
+                    lib.pins
+                        .iter()
+                        .position(|pin| pin.id == selected.id && pin.board_id == selected.board_id)
+                        .unwrap()
+                        + 1,
+                );
+                record_rotation(&mut lib, &selected);
+                lib.current = Some(selected);
+            }
+            assert_eq!(visited.len(), eligible_count);
+            eprintln!("Decoded rotation cycle: {positions:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "read-only replay; set PINPAPER_ROTATION_REPLAY_LIBRARY to a saved library JSON"]
+    fn saved_library_decoded_rotation_replay() {
+        let path = std::env::var("PINPAPER_ROTATION_REPLAY_LIBRARY").unwrap();
+        let lib: Library = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let mut all = lib.clone();
+        all.current = None;
+        let eligible = ranked(&all)
+            .into_iter()
+            .filter(|pin| {
+                pin.dimensions_verified
+                    && pin.width >= lib.settings.min_width
+                    && match lib.settings.orientation.as_str() {
+                        "landscape" => pin.width > pin.height,
+                        "portrait" => pin.height > pin.width,
+                        _ => true,
+                    }
+            })
+            .count();
+        assert!(
+            eligible > 2,
+            "replay needs at least three usable decoded pictures"
+        );
+        eprintln!(
+            "Saved pins: {}; usable decoded pictures: {eligible}",
+            lib.pins.len()
+        );
+        assert_decoded_rotation_cycles(lib, eligible);
     }
 
     #[test]
