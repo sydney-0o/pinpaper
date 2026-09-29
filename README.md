@@ -42,22 +42,22 @@ Available for macOS, Windows, and Linux. Your collection is saved on your comput
 
 ### Install
 
-[Pinpaper 0.1.1 is available](https://github.com/sydney-0o/pinpaper/releases/tag/v0.1.1). Download the file for your computer:
+[Pinpaper 0.1.2 is available](https://github.com/sydney-0o/pinpaper/releases/tag/v0.1.2). Download the file for your computer. The release page also contains [SHA256 checksums](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/SHA256SUMS.txt) so you can verify a downloaded file before opening it:
 
 | System | File | What to do |
 | --- | --- | --- |
-| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_macOS_arm64.dmg) | Open the file and drag Pinpaper to Applications. |
-| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_macOS_x64.dmg) | Open the file and drag Pinpaper to Applications. |
-| Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_x64-portable.exe) | Keep it in any folder and double-click it. |
-| Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_linux_x64.AppImage) | Allow it to run in the file's Properties, then open it. |
-| Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_linux_x64.deb) | Double-click the file and choose Install. |
+| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_arm64.dmg) | Open the file and drag Pinpaper to Applications. |
+| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_x64.dmg) | Open the file and drag Pinpaper to Applications. |
+| Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_x64-portable.exe) | Keep it in any folder and double-click it. |
+| Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_linux_x64.AppImage) | Allow it to run in the file's Properties, then open it. |
+| Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_linux_x64.deb) | Double-click the file and choose Install. |
 
 <details>
 <summary>macOS details</summary>
 
 Choose **Apple menu → About This Mac** to check your processor. For an M1 or newer chip, download the `arm64` file. For an Intel processor, download `x64`.
 
-The app is not yet signed by Apple. macOS may show a warning when you first open it. Check that you downloaded it from this repository's Releases page, then use macOS's **Open** option if offered.
+The macOS builds have a complete **ad-hoc code signature**, but they are not signed with an Apple Developer ID certificate and are not notarized. This fixes the incomplete-signature problem that can make a downloaded Apple Silicon app appear damaged, but macOS may still show a security warning and behavior can vary by macOS version. After you have tried to open the app, go to **Apple menu → System Settings → Privacy & Security → Open Anyway**, then confirm **Open** only after checking the release page and checksum. This is a per-app approval; do not disable Gatekeeper globally. A command-line `spctl` check may still reject this ad-hoc, non-notarized build. See [Apple's per-app instructions](https://support.apple.com/en-us/guide/mac-help/mh40617/mac).
 
 </details>
 
@@ -208,22 +208,22 @@ Pinpaper ставит картинки из Pinterest на обои рабоче
 
 ### Установка
 
-[Pinpaper 0.1.1 уже доступен](https://github.com/sydney-0o/pinpaper/releases/tag/v0.1.1). Скачайте файл для своего компьютера:
+[Pinpaper 0.1.2 уже доступен](https://github.com/sydney-0o/pinpaper/releases/tag/v0.1.2). Скачайте файл для своего компьютера. На странице релиза также есть [контрольные суммы SHA256](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/SHA256SUMS.txt), чтобы проверить скачанный файл перед запуском:
 
 | Система | Файл | Что делать |
 | --- | --- | --- |
-| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_macOS_arm64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». |
-| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_macOS_x64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». |
-| Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_x64-portable.exe) | Сохранить в удобную папку и запустить двойным щелчком. |
-| Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_linux_x64.AppImage) | Разрешить запуск в свойствах файла, затем открыть его. |
-| Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.1/Pinpaper_0.1.1_linux_x64.deb) | Открыть файл двойным щелчком и нажать «Установить». |
+| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_arm64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». |
+| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_x64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». |
+| Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_x64-portable.exe) | Сохранить в удобную папку и запустить двойным щелчком. |
+| Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_linux_x64.AppImage) | Разрешить запуск в свойствах файла, затем открыть его. |
+| Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_linux_x64.deb) | Открыть файл двойным щелчком и нажать «Установить». |
 
 <details>
 <summary>Подробности для macOS</summary>
 
 Посмотрите процессор в меню **Apple → Об этом Mac**. Для M1 и новее скачайте файл `arm64`, для Intel — `x64`.
 
-У приложения пока нет подписи Apple, поэтому при первом запуске macOS может показать предупреждение. Убедитесь, что файл скачан со страницы Releases этого репозитория. Если macOS предлагает действие **Открыть**, воспользуйтесь им.
+Сборки macOS имеют полную **ad-hoc-подпись**, но не подписаны сертификатом Apple Developer ID и не прошли нотариальную проверку Apple. Это исправляет проблему неполной подписи, из-за которой скачанное приложение Apple Silicon могло выглядеть повреждённым, но macOS всё равно может показать предупреждение, а поведение зависит от версии macOS. После первой попытки запуска откройте **Apple → Системные настройки → Конфиденциальность и безопасность → Открыть всё равно**, затем подтвердите **Открыть**, только проверив страницу релиза и контрольную сумму. Это разрешение только для Pinpaper; не отключайте Gatekeeper глобально. Команда `spctl` всё ещё может отклонить такую ad-hoc-сборку без нотариальной проверки — это ожидаемо. См. [инструкцию Apple для отдельного приложения](https://support.apple.com/ru-ru/guide/mac-help/mh40617/mac).
 
 </details>
 

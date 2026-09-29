@@ -84,6 +84,57 @@ jobs:
             cp "$deb" "release-assets/Pinpaper_${version}_linux_x64.deb"
           fi
 
+      - name: Verify macOS app inside final DMG
+        if: runner.os == 'macOS'
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch == 'arm64' && 'arm64' || 'x86_64' }}
+        run: |
+          set -euo pipefail
+
+          dmg=$(find release-assets -maxdepth 1 -type f -name '*.dmg' -print -quit)
+          test -n "$dmg"
+          mount_dir=$(mktemp -d)
+          cleanup() {
+            hdiutil detach "$mount_dir" >/dev/null 2>&1 || true
+            rmdir "$mount_dir" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount_dir" >/dev/null
+          app="$mount_dir/Pinpaper.app"
+          test -d "$app"
+
+          version=$(node -p "require('./package.json').version")
+          bundle_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
+          test "$bundle_version" = "$version"
+
+          executable=$(find "$app/Contents/MacOS" -maxdepth 1 -type f -perm -111 -print -quit)
+          test -n "$executable"
+          archs=$(lipo -archs "$executable")
+          case " $archs " in
+            *" $EXPECTED_ARCH "*) ;;
+            *) echo "Unexpected executable architectures: $archs (expected $EXPECTED_ARCH)" >&2; exit 1 ;;
+          esac
+
+          # Validate the app copied into the DMG, including nested code and
+          # every resource in its sealed CodeResources manifest.
+          codesign --verify --deep --strict --verbose=2 "$app"
+          signature_info=$(codesign -dv --verbose=4 "$app" 2>&1)
+          printf '%s\n' "$signature_info"
+          printf '%s\n' "$signature_info" | grep -q '^Signature=adhoc$'
+          test -f "$app/Contents/_CodeSignature/CodeResources"
+
+          # Ad-hoc signatures are intentionally not treated as Apple trust.
+          # spctl can reject them because this build is not Developer ID signed
+          # or notarized; the strict codesign check above is the CI gate.
+          if spctl_output=$(spctl -a -t exec -vv "$app" 2>&1); then
+            echo "spctl accepted this app assessment:"
+            printf '%s\n' "$spctl_output"
+          else
+            echo "::notice::spctl did not accept the ad-hoc/non-notarized app; this is expected and is not the CI acceptance gate."
+            printf '%s\n' "$spctl_output"
+          fi
+
       - name: Build Windows portable executable
         if: runner.os == 'Windows'
         shell: pwsh
@@ -110,6 +161,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out source for release notes
+        uses: actions/checkout@v4
+
       - name: Download platform artifacts
         uses: actions/download-artifact@v4
         with:
@@ -129,6 +183,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*
+          body_path: docs/releases/${{ github.ref_name }}.md
           draft: true
           fail_on_unmatched_files: true
           generate_release_notes: true
