@@ -220,8 +220,8 @@ Pinpaper ставит картинки из Pinterest на обои рабоче
 
 | Система | Файл | Что делать |
 | --- | --- | --- |
-| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_arm64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». |
-| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_x64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». |
+| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_arm64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». В первый запуск нужно разрешить это приложение в Системных Настройках |
+| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_x64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». В первый запуск нужно разрешить это приложение в Системных Настройках |
 | Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_x64-portable.exe) | Сохранить в удобную папку и запустить двойным щелчком. |
 | Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_linux_x64.AppImage) | Разрешить запуск в свойствах файла, затем открыть его. |
 | Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_linux_x64.deb) | Открыть файл двойным щелчком и нажать «Установить». |
