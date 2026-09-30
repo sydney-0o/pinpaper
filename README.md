@@ -46,8 +46,8 @@ Available for macOS, Windows, and Linux. Your collection is saved on your comput
 
 | System | File | What to do |
 | --- | --- | --- |
-| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_arm64.dmg) | Open the file and drag Pinpaper to Applications. |
-| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_x64.dmg) | Open the file and drag Pinpaper to Applications. |
+| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_arm64.dmg) | Open the file and drag Pinpaper to Applications. For the first launch allow app in MacOs System Settings. |
+| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_x64.dmg) | Open the file and drag Pinpaper to Applications. For the first launch allow app in MacOs System Settings. |
 | Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_x64-portable.exe) | Keep it in any folder and double-click it. |
 | Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_linux_x64.AppImage) | Allow it to run in the file's Properties, then open it. |
 | Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_linux_x64.deb) | Double-click the file and choose Install. |
