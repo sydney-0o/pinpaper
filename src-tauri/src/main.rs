@@ -2,6 +2,8 @@
 mod autostart;
 mod browser_session;
 mod language;
+#[cfg(any(target_os = "linux", test))]
+mod linux_startup;
 mod model;
 mod network;
 mod prefetch;
@@ -847,6 +849,10 @@ fn browser_report(
 }
 
 fn main() {
+    // This must run before Tauri/GTK creates WebKitGTK renderer processes.
+    #[cfg(target_os = "linux")]
+    linux_startup::configure();
+
     let commands: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> =
         Box::new(tauri::generate_handler![
             snapshot,

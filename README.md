@@ -42,15 +42,15 @@ Available for macOS, Windows, and Linux. Your collection is saved on your comput
 
 ### Install
 
-[Pinpaper 0.1.2 is available](https://github.com/sydney-0o/pinpaper/releases/tag/v0.1.2). Download the file for your computer. The release page also contains [SHA256 checksums](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/SHA256SUMS.txt) so you can verify a downloaded file before opening it:
+[Pinpaper 0.1.3 is available](https://github.com/sydney-0o/pinpaper/releases/tag/v0.1.3). Download the file for your computer. The release page also contains [SHA256 checksums](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.3/SHA256SUMS.txt) so you can verify a downloaded file before opening it:
 
 | System | File | What to do |
 | --- | --- | --- |
-| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_arm64.dmg) | Open the file and drag Pinpaper to Applications. For the first launch allow app in MacOs System Settings. |
-| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_x64.dmg) | Open the file and drag Pinpaper to Applications. For the first launch allow app in MacOs System Settings. |
-| Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_x64-portable.exe) | Keep it in any folder and double-click it. |
-| Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_linux_x64.AppImage) | Allow it to run in the file's Properties, then open it. |
-| Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_linux_x64.deb) | Double-click the file and choose Install. |
+| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.3/Pinpaper_0.1.3_macOS_arm64.dmg) | Open the file and drag Pinpaper to Applications. For the first launch allow app in MacOs System Settings. |
+| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.3/Pinpaper_0.1.3_macOS_x64.dmg) | Open the file and drag Pinpaper to Applications. For the first launch allow app in MacOs System Settings. |
+| Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.3/Pinpaper_0.1.3_x64-portable.exe) | Keep it in any folder and double-click it. |
+| Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.3/Pinpaper_0.1.3_linux_x64.AppImage) | Allow it to run in the file's Properties, then open it. |
+| Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.3/Pinpaper_0.1.3_linux_x64.deb) | Double-click the file and choose Install. |
 
 ### macOS: first launch
 
@@ -216,15 +216,15 @@ Pinpaper ставит картинки из Pinterest на обои рабоче
 
 ### Установка
 
-[Pinpaper 0.1.2 уже доступен](https://github.com/sydney-0o/pinpaper/releases/tag/v0.1.2). Скачайте файл для своего компьютера. На странице релиза также есть [контрольные суммы SHA256](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/SHA256SUMS.txt), чтобы проверить скачанный файл перед запуском:
+[Pinpaper 0.1.3 уже доступен](https://github.com/sydney-0o/pinpaper/releases/tag/v0.1.3). Скачайте файл для своего компьютера. На странице релиза также есть [контрольные суммы SHA256](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.3/SHA256SUMS.txt), чтобы проверить скачанный файл перед запуском:
 
 | Система | Файл | Что делать |
 | --- | --- | --- |
-| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_arm64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». В первый запуск нужно разрешить это приложение в Системных Настройках |
-| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_macOS_x64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». В первый запуск нужно разрешить это приложение в Системных Настройках |
-| Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_x64-portable.exe) | Сохранить в удобную папку и запустить двойным щелчком. |
-| Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_linux_x64.AppImage) | Разрешить запуск в свойствах файла, затем открыть его. |
-| Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.2/Pinpaper_0.1.2_linux_x64.deb) | Открыть файл двойным щелчком и нажать «Установить». |
+| macOS 11+, Apple Silicon | [DMG · arm64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.3/Pinpaper_0.1.3_macOS_arm64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». В первый запуск нужно разрешить это приложение в Системных Настройках |
+| macOS 11+, Intel | [DMG · x64](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.3/Pinpaper_0.1.3_macOS_x64.dmg) | Открыть файл и перетащить Pinpaper в «Программы». В первый запуск нужно разрешить это приложение в Системных Настройках |
+| Windows 10/11, x64 | [Portable EXE](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.3/Pinpaper_0.1.3_x64-portable.exe) | Сохранить в удобную папку и запустить двойным щелчком. |
+| Linux, x64 | [AppImage](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.3/Pinpaper_0.1.3_linux_x64.AppImage) | Разрешить запуск в свойствах файла, затем открыть его. |
+| Debian / Ubuntu, x64 | [DEB](https://github.com/sydney-0o/pinpaper/releases/download/v0.1.3/Pinpaper_0.1.3_linux_x64.deb) | Открыть файл двойным щелчком и нажать «Установить». |
 
 ### Первый запуск на macOS
 

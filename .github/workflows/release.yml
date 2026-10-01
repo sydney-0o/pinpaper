@@ -135,6 +135,46 @@ jobs:
             printf '%s\n' "$spctl_output"
           fi
 
+      - name: Verify Linux bundles and packaged entrypoints
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+
+          version=$(node -p "require('./package.json').version")
+          appimage=$(find release-assets -maxdepth 1 -type f -name '*.AppImage' -print -quit)
+          deb=$(find release-assets -maxdepth 1 -type f -name '*.deb' -print -quit)
+          test -n "$appimage"
+          test -n "$deb"
+
+          # The outer AppImage launcher and the packaged application must both
+          # be x86-64 ELF files; this is a structural check, not a desktop
+          # session or GPU/NVIDIA runtime test.
+          file "$appimage" | grep -Eq 'ELF 64-bit LSB.*x86-64'
+          test "$(dpkg-deb --field "$deb" Architecture)" = amd64
+          test "$(dpkg-deb --field "$deb" Version)" = "$version"
+
+          deb_root=$(mktemp -d)
+          appimage_root=$(mktemp -d)
+          cleanup() {
+            rm -rf "$deb_root" "$appimage_root"
+          }
+          trap cleanup EXIT
+
+          dpkg-deb --extract "$deb" "$deb_root"
+          deb_binary="$deb_root/usr/bin/pinpaper"
+          test -x "$deb_binary"
+          file "$deb_binary" | grep -Eq 'ELF 64-bit LSB.*x86-64'
+          readelf -d "$deb_binary" | grep -q 'libwebkit2gtk-4.1.so.0'
+
+          (cd "$appimage_root" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null)
+          appimage_binary="$appimage_root/squashfs-root/usr/bin/pinpaper"
+          test -x "$appimage_binary"
+          file "$appimage_binary" | grep -Eq 'ELF 64-bit LSB.*x86-64'
+          readelf -d "$appimage_binary" | grep -q 'libwebkit2gtk-4.1.so.0'
+          desktop_file=$(find "$appimage_root/squashfs-root" -maxdepth 2 -type f -name '*.desktop' -print -quit)
+          test -n "$desktop_file"
+          grep -Eq '^Exec=pinpaper([[:space:]]|$)' "$desktop_file"
+
       - name: Build Windows portable executable
         if: runner.os == 'Windows'
         shell: pwsh
@@ -178,6 +218,9 @@ jobs:
           test "$(find . -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 1
           test "$(find . -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
           sha256sum *.dmg *.exe *.AppImage *.deb > SHA256SUMS.txt
+
+      - name: Verify versioned release notes
+        run: test -f "docs/releases/${GITHUB_REF_NAME}.md"
 
       - name: Create release and attach bundles
         uses: softprops/action-gh-release@v2
