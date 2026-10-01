@@ -149,7 +149,18 @@ jobs:
           # The outer AppImage launcher and the packaged application must both
           # be x86-64 ELF files; this is a structural check, not a desktop
           # session or GPU/NVIDIA runtime test.
-          file "$appimage" | grep -Eq 'ELF 64-bit LSB.*x86-64'
+          assert_x86_64_elf() {
+            readelf -h "$1" | awk '
+              $1 == "Class:" { class = $2 }
+              $1 == "Machine:" {
+                $1 = ""
+                sub(/^[[:space:]]+/, "")
+                machine = $0
+              }
+              END { exit !(class == "ELF64" && machine == "Advanced Micro Devices X86-64") }
+            '
+          }
+          assert_x86_64_elf "$appimage"
           test "$(dpkg-deb --field "$deb" Architecture)" = amd64
           test "$(dpkg-deb --field "$deb" Version)" = "$version"
 
@@ -163,17 +174,17 @@ jobs:
           dpkg-deb --extract "$deb" "$deb_root"
           deb_binary="$deb_root/usr/bin/pinpaper"
           test -x "$deb_binary"
-          file "$deb_binary" | grep -Eq 'ELF 64-bit LSB.*x86-64'
-          readelf -d "$deb_binary" | grep -q 'libwebkit2gtk-4.1.so.0'
+          assert_x86_64_elf "$deb_binary"
+          objdump -p "$deb_binary" | awk '$1 == "NEEDED" && $2 == "libwebkit2gtk-4.1.so.0" { found = 1 } END { exit !found }'
 
           (cd "$appimage_root" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null)
           appimage_binary="$appimage_root/squashfs-root/usr/bin/pinpaper"
           test -x "$appimage_binary"
-          file "$appimage_binary" | grep -Eq 'ELF 64-bit LSB.*x86-64'
-          readelf -d "$appimage_binary" | grep -q 'libwebkit2gtk-4.1.so.0'
-          desktop_file=$(find "$appimage_root/squashfs-root" -maxdepth 2 -type f -name '*.desktop' -print -quit)
+          assert_x86_64_elf "$appimage_binary"
+          objdump -p "$appimage_binary" | awk '$1 == "NEEDED" && $2 == "libwebkit2gtk-4.1.so.0" { found = 1 } END { exit !found }'
+          desktop_file=$(find "$appimage_root/squashfs-root" -maxdepth 1 \( -type f -o -type l \) -name '*.desktop' -print -quit)
           test -n "$desktop_file"
-          grep -Eq '^Exec=pinpaper([[:space:]]|$)' "$desktop_file"
+          awk -F= '$1 == "Exec" && ($2 == "pinpaper" || $2 ~ /^pinpaper[[:space:]]/) { found = 1 } END { exit !found }' "$desktop_file"
 
       - name: Build Windows portable executable
         if: runner.os == 'Windows'
